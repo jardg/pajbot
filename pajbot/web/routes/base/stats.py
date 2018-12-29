@@ -1,8 +1,9 @@
 from flask import render_template
 
-from pajbot.managers import DBManager
-from pajbot.managers import RedisManager
-from pajbot.managers import UserManager
+import pajbot.web.utils
+from pajbot.managers.db import DBManager
+from pajbot.managers.redis import RedisManager
+from pajbot.managers.user import UserManager
 from pajbot.models.duel import UserDuelStats
 from pajbot.streamhelper import StreamHelper
 
@@ -10,7 +11,8 @@ from pajbot.streamhelper import StreamHelper
 def init(app):
     @app.route('/stats/')
     def stats():
-        top_5_commands = sorted(app.bot_commands_list, key=lambda c: c.data.num_uses if c.data is not None else -1, reverse=True)[:5]
+        bot_commands_list = pajbot.web.utils.get_cached_commands()
+        top_5_commands = sorted(bot_commands_list, key=lambda c: c['data']['num_uses'] if c['data'] is not None else -1, reverse=True)[:5]
 
         redis = RedisManager.get()
 

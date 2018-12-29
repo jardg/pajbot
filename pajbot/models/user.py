@@ -3,21 +3,19 @@ import json
 import logging
 from contextlib import contextmanager
 
-import sqlalchemy
 from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import Integer
 from sqlalchemy import String
 
 from pajbot.exc import FailedCommand
-from pajbot.managers import Base
-from pajbot.managers import DBManager
-from pajbot.managers import HandlerManager
-from pajbot.managers import RedisManager
-from pajbot.managers import ScheduleManager
-from pajbot.managers import TimeManager
+from pajbot.managers.db import Base
+from pajbot.managers.db import DBManager
+from pajbot.managers.redis import RedisManager
+from pajbot.managers.schedule import ScheduleManager
+from pajbot.managers.time import TimeManager
 from pajbot.streamhelper import StreamHelper
-from pajbot.tbutil import time_method  # NOQA
+from pajbot.utils import time_method  # NOQA
 
 log = logging.getLogger(__name__)
 
@@ -117,8 +115,8 @@ class UserSQL:
 
         self.model_loaded = True
 
-        log.debug('[UserSQL] Loading user model for {}'.format(self.username))
-        # from pajbot.tbutil import print_traceback
+        # log.debug('[UserSQL] Loading user model for {}'.format(self.username))
+        # from pajbot.utils import print_traceback
         # print_traceback()
 
         if self.shared_db_session:
@@ -134,11 +132,15 @@ class UserSQL:
         if not self.model_loaded:
             return
 
-        if save_to_db and not self.shared_db_session:
-            with DBManager.create_session_scope(expire_on_commit=False) as db_session:
-                db_session.add(self.user_model)
+        try:
+            if save_to_db and not self.shared_db_session:
+                with DBManager.create_session_scope(expire_on_commit=False) as db_session:
+                    # log.debug('Calling db_session.add on {}'.format(self.user_model))
+                    db_session.add(self.user_model)
 
-        UserSQLCache.save(self.user_model)
+            UserSQLCache.save(self.user_model)
+        except:
+            log.exception('Caught exception in sql_save while saving {}'.format(self.user_model))
 
     @property
     def id(self):
@@ -224,6 +226,8 @@ class UserSQL:
 
     @property
     def points_rank(self):
+        return 420
+        """
         if self.shared_db_session:
             query_data = self.shared_db_session.query(sqlalchemy.func.count(User.id)).filter(User.points > self.points).one()
         else:
@@ -232,6 +236,7 @@ class UserSQL:
 
         rank = int(query_data[0]) + 1
         return rank
+        """
 
     @property
     def duel_stats(self):
@@ -247,6 +252,7 @@ class UserSQL:
 class UserRedis:
     SS_KEYS = [
             'num_lines',
+            'tokens',
             ]
     HASH_KEYS = [
             'last_seen',
@@ -261,6 +267,7 @@ class UserRedis:
 
     SS_DEFAULTS = {
             'num_lines': 0,
+            'tokens': 0,
             }
     HASH_DEFAULTS = {
             'last_seen': None,
@@ -351,6 +358,26 @@ class UserRedis:
                 self.redis.zadd('{streamer}:users:num_lines'.format(streamer=StreamHelper.get_streamer()), self.username, value)
             else:
                 self.redis.zrem('{streamer}:users:num_lines'.format(streamer=StreamHelper.get_streamer()), self.username)
+
+    @property
+    def tokens(self):
+        if self.save_to_redis:
+            self.redis_load()
+            return self.values['tokens']
+        else:
+            return self.values.get('tokens', 0)
+
+    @tokens.setter
+    def tokens(self, value):
+        # Set cached value
+        self.values['tokens'] = value
+
+        if self.save_to_redis:
+            # Set redis value
+            if value != 0:
+                self.redis.zadd('{streamer}:users:tokens'.format(streamer=StreamHelper.get_streamer()), self.username, value)
+            else:
+                self.redis.zrem('{streamer}:users:tokens'.format(streamer=StreamHelper.get_streamer()), self.username)
 
     @property
     def num_lines_rank(self):
@@ -607,24 +634,31 @@ class UserCombined(UserRedis, UserSQL):
     def spend_currency_context(self, points_to_spend, tokens_to_spend):
         # TODO: After the token storage rewrite, use tokens here too
         try:
-            self.spend_points(points_to_spend)
+            self._spend_points(points_to_spend)
+            self._spend_tokens(tokens_to_spend)
             yield
         except FailedCommand:
             log.debug('Returning {} points to {}'.format(points_to_spend, self.username_raw))
             self.points += points_to_spend
+            self.tokens += tokens_to_spend
         except:
             # An error occured, return the users points!
             log.exception('XXXX')
             log.debug('Returning {} points to {}'.format(points_to_spend, self.username_raw))
             self.points += points_to_spend
 
-    def spend(self, points_to_spend):
-        # XXX: Remove all usages of spend() and use spend_points() instead
-        return self.spend_points(points_to_spend)
-
-    def spend_points(self, points_to_spend):
+    def _spend_points(self, points_to_spend):
+        """ Returns true if points were spent, otherwise return False """
         if points_to_spend <= self.points:
             self.points -= points_to_spend
+            return True
+
+        return False
+
+    def _spend_tokens(self, tokens_to_spend):
+        """ Returns true if tokens were spent, otherwise return False """
+        if tokens_to_spend <= self.tokens:
+            self.tokens -= tokens_to_spend
             return True
 
         return False
@@ -651,80 +685,5 @@ class UserCombined(UserRedis, UserSQL):
     def __eq__(self, other):
         return self.username == other.username
 
-    # TODO: rewrite this token code shit
     def can_afford_with_tokens(self, cost):
-        num_tokens = self.get_tokens()
-        return num_tokens >= cost
-
-    def spend_tokens(self, tokens_to_spend, redis=None):
-        if redis is None:
-            redis = RedisManager.get()
-
-        user_token_key = '{streamer}:{username}:tokens'.format(
-                streamer=StreamHelper.get_streamer(), username=self.username)
-
-        token_dict = redis.hgetall(user_token_key)
-
-        for stream_id in token_dict:
-            try:
-                num_tokens = int(token_dict[stream_id])
-            except (TypeError, ValueError):
-                continue
-
-            if num_tokens == 0:
-                continue
-
-            decrease_by = min(tokens_to_spend, num_tokens)
-            tokens_to_spend -= decrease_by
-            num_tokens -= decrease_by
-
-            redis.hset(user_token_key, stream_id, num_tokens)
-
-            if tokens_to_spend == 0:
-                return True
-
-        return False
-
-    def award_tokens(self, tokens, redis=None, force=False):
-        """ Returns True if tokens were awarded properly.
-        Returns False if not.
-        Tokens can only be rewarded once per stream ID.
-        """
-
-        streamer = StreamHelper.get_streamer()
-        stream_id = StreamHelper.get_current_stream_id()
-
-        if stream_id is False:
-            return False
-
-        if redis is None:
-            redis = RedisManager.get()
-
-        key = '{streamer}:{username}:tokens'.format(
-                streamer=streamer, username=self.username)
-
-        if force:
-            res = True
-            redis.hset(key, stream_id, tokens)
-        else:
-            res = True if redis.hsetnx(key, stream_id, tokens) == 1 else False
-            if res is True:
-                HandlerManager.trigger('on_user_gain_tokens', self, tokens)
-        return res
-
-    def get_tokens(self, redis=None):
-        streamer = StreamHelper.get_streamer()
-        if redis is None:
-            redis = RedisManager.get()
-
-        tokens = redis.hgetall('{streamer}:{username}:tokens'.format(
-            streamer=streamer, username=self.username))
-
-        num_tokens = 0
-        for token_value in tokens.values():
-            try:
-                num_tokens += int(token_value)
-            except (TypeError, ValueError):
-                log.warn('Invalid value for tokens, user {}'.format(self.username))
-
-        return num_tokens
+        return self.tokens >= cost

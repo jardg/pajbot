@@ -27,8 +27,8 @@ from sqlalchemy import DateTime
 from sqlalchemy import Integer
 from sqlalchemy import String
 
-from pajbot.tbutil import load_config
-from pajbot.managers import RedisManager
+from pajbot.utils import load_config
+from pajbot.managers.redis import RedisManager
 
 Session = sessionmaker()
 
@@ -50,7 +50,6 @@ pb_config = load_config(args.config)
 
 redis_options = {}
 if 'redis' in pb_config:
-    log.info(pb_config._sections['redis'])
     redis_options = pb_config._sections['redis']
 
 RedisManager.init(**redis_options)

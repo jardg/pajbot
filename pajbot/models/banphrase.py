@@ -1,18 +1,19 @@
 import argparse
 import logging
+import re
 
 import sqlalchemy
 from sqlalchemy import Boolean
 from sqlalchemy import Column
-from sqlalchemy import Enum
 from sqlalchemy import ForeignKey
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy.orm import relationship
+from unidecode import unidecode
 
-from pajbot.managers import Base
-from pajbot.managers import DBManager
-from pajbot.tbutil import find
+from pajbot.managers.db import Base
+from pajbot.managers.db import DBManager
+from pajbot.utils import find
 
 log = logging.getLogger('pajbot')
 
@@ -28,12 +29,13 @@ class Banphrase(Base):
     warning = Column(Boolean, nullable=False, default=True)
     notify = Column(Boolean, nullable=False, default=True)
     case_sensitive = Column(Boolean, nullable=False, default=False)
+    remove_accents = Column(Boolean, nullable=False, default=False)
     enabled = Column(Boolean, nullable=False, default=True)
     sub_immunity = Column(Boolean,
             nullable=False,
             default=False,
             server_default=sqlalchemy.sql.expression.false())
-    operator = Column(Enum('contains', 'startswith', 'endswith'),
+    operator = Column(String(32),
             nullable=False,
             default='contains',
             server_default='contains')
@@ -56,6 +58,8 @@ class Banphrase(Base):
         self.case_sensitive = False
         self.enabled = True
         self.operator = 'contains'
+        self.remove_accents = False
+        self.compiled_regex = None
 
         self.set(**options)
 
@@ -70,29 +74,54 @@ class Banphrase(Base):
         self.sub_immunity = options.get('sub_immunity', self.sub_immunity)
         self.enabled = options.get('enabled', self.enabled)
         self.operator = options.get('operator', self.operator)
+        self.remove_accents = options.get('remove_accents', self.remove_accents)
+        self.compiled_regex = None
 
         self.refresh_operator()
+
+    def format_message(self, message):
+        if self.case_sensitive is False:
+            message = message.lower()
+        if self.remove_accents:
+            message = unidecode(message)
+
+        return message
+
+    def get_phrase(self):
+        if self.case_sensitive is False:
+            return self.phrase.lower()
+        return self.phrase
 
     def refresh_operator(self):
         self.predicate = getattr(self, 'predicate_{}'.format(self.operator), None)
 
+        self.compiled_regex = None
+        if self.operator == 'regex':
+            try:
+                if self.case_sensitive:
+                    self.compiled_regex = re.compile(self.phrase)
+                else:
+                    self.compiled_regex = re.compile(self.phrase, flags=re.IGNORECASE)
+            except Exception:
+                log.exception('Unable to compile regex: {}'.format(self.phrase))
+
     def predicate_contains(self, message):
-        if self.case_sensitive:
-            return self.phrase in message
-        else:
-            return self.phrase.lower() in message.lower()
+        return self.get_phrase() in self.format_message(message)
 
     def predicate_startswith(self, message):
-        if self.case_sensitive:
-            return message.startswith(self.phrase)
-        else:
-            return message.lower().startswith(self.phrase.lower())
+        return self.format_message(message).startswith(self.get_phrase())
 
     def predicate_endswith(self, message):
-        if self.case_sensitive:
-            return message.endswith(self.phrase)
-        else:
-            return message.lower().endswith(self.phrase.lower())
+        return self.format_message(message).endswith(self.get_phrase())
+
+    def predicate_exact(self, message):
+        return self.format_message(message) == self.get_phrase()
+
+    def predicate_regex(self, message):
+        if not self.compiled_regex:
+            return False
+
+        return self.compiled_regex.search(self.format_message(message))
 
     def match(self, message, user):
         """
@@ -100,9 +129,24 @@ class Banphrase(Base):
         Otherwise it returns False
         Respects case-sensitiveness option
         """
-        if self.sub_immunity is True and user.subscriber is True:
+        if user and self.sub_immunity is True and user.subscriber is True:
             return False
         return self.predicate(message)
+
+    def greater_than(self, other):
+        if other.permanent:
+            if self.permanent:
+                return False
+
+            return False
+
+        if self.permanent:
+            return True
+
+        if self.length > other.length:
+            return True
+
+        return False
 
     def exact_match(self, message):
         """
@@ -114,6 +158,17 @@ class Banphrase(Base):
             return self.phrase == message
         else:
             return self.phrase.lower() == message.lower()
+
+    def jsonify(self):
+        return {
+                'id': self.id,
+                'name': self.name,
+                'phrase': self.phrase,
+                'length': self.length,
+                'permanent': self.permanent,
+                'operator': self.operator,
+                'case_sensitive': self.case_sensitive,
+                }
 
 
 @sqlalchemy.event.listens_for(Banphrase, 'load')
@@ -286,7 +341,7 @@ class BanphraseManager:
                     use_warnings=banphrase.warning)
 
             """ Finally, time out the user for whatever timeout length was required. """
-            self.bot.timeout(user.username, timeout_length)
+            self.bot.timeout(user.username, timeout_length, reason='Banned phrase {}'.format(banphrase.id))
 
         if banphrase.notify is True and user.minutes_in_chat_online > 60:
             """ Last but not least, notify the user why he has been timed out
@@ -295,8 +350,19 @@ class BanphraseManager:
             self.bot.whisper(user.username, notification_msg)
 
     def check_message(self, message, user):
-        match = find(lambda banphrase: banphrase.match(message, user), self.enabled_banphrases)
-        return match or False
+        matched_banphrase = None
+        for banphrase in self.enabled_banphrases:
+            if banphrase.match(message, user):
+                if matched_banphrase:
+                    if banphrase.greater_than(matched_banphrase):
+                        matched_banphrase = banphrase
+                        continue
+
+                matched_banphrase = banphrase
+
+        # match = find(lambda banphrase: banphrase.match(message, user), self.enabled_banphrases)
+
+        return matched_banphrase or False
 
     def find_match(self, message, id=None):
         match = None
@@ -323,13 +389,16 @@ class BanphraseManager:
         parser.add_argument('--no-warning', dest='warning', action='store_false')
         parser.add_argument('--subimmunity', dest='sub_immunity', action='store_true')
         parser.add_argument('--no-subimmunity', dest='sub_immunity', action='store_false')
+        parser.add_argument('--removeaccents', dest='remove_accents', action='store_true')
+        parser.add_argument('--no-removeaccents', dest='remove_accents', action='store_false')
         parser.add_argument('--name', nargs='+', dest='name')
         parser.set_defaults(length=None,
                 notify=None,
                 permanent=None,
                 case_sensitive=None,
                 warning=None,
-                sub_immunity=None)
+                sub_immunity=None,
+                remove_accents=None)
 
         try:
             args, unknown = parser.parse_known_args(message.split())

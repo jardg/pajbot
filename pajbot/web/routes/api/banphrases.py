@@ -6,9 +6,10 @@ from flask_restful import Resource
 import pajbot.modules
 import pajbot.utils
 import pajbot.web.utils
-from pajbot.managers import AdminLogManager
-from pajbot.managers import DBManager
+from pajbot.managers.adminlog import AdminLogManager
+from pajbot.managers.db import DBManager
 from pajbot.models.banphrase import Banphrase
+from pajbot.models.banphrase import BanphraseManager
 from pajbot.models.sock import SocketClientManager
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,56 @@ class APIBanphraseToggle(Resource):
             return {'success': 'successful toggle', 'new_state': new_state}
 
 
+class APIBanphraseTest(Resource):
+    def __init__(self):
+        super().__init__()
+
+        self.post_parser = reqparse.RequestParser()
+        self.post_parser.add_argument('message', required=True)
+
+    def post(self, **options):
+        args = self.post_parser.parse_args()
+
+        banphrase_manager = BanphraseManager(None).load()
+
+        try:
+            message = str(args['message'])
+        except (ValueError, KeyError):
+            return {'error': 'Invalid `message` parameter.'}, 400
+
+        if len(message) == 0:
+            return {'error': 'Parameter `message` cannot be empty.'}, 400
+
+        ret = {
+                'banned': False,
+                'input_message': message
+                }
+
+        res = banphrase_manager.check_message(message, None)
+
+        if res is not False:
+            ret['banned'] = True
+            ret['banphrase_data'] = res
+
+        return ret
+
+
+class APIBanphraseDump(Resource):
+    def __init__(self):
+        super().__init__()
+
+    def get(self, **options):
+        banphrase_manager = BanphraseManager(None).load()
+
+        return banphrase_manager.enabled_banphrases
+
+
 def init(api):
     api.add_resource(APIBanphraseRemove, '/banphrases/remove/<int:banphrase_id>')
     api.add_resource(APIBanphraseToggle, '/banphrases/toggle/<int:row_id>')
+
+    # Test a message against banphrases
+    api.add_resource(APIBanphraseTest, '/banphrases/test')
+
+    # Dump
+    # api.add_resource(APIBanphraseDump, '/banphrases/dump')

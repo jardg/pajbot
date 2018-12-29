@@ -1,13 +1,13 @@
 import datetime
 import logging
-import math
 
 from numpy import random
 
-from pajbot.managers import DBManager
-from pajbot.managers import HandlerManager
-from pajbot.models.command import Command
-from pajbot.models.command import CommandExample
+import pajbot.exc
+import pajbot.models
+import pajbot.utils
+from pajbot.managers.db import DBManager
+from pajbot.managers.handler import HandlerManager
 from pajbot.models.roulette import Roulette
 from pajbot.modules import BaseModule
 from pajbot.modules import ModuleSetting
@@ -104,6 +104,7 @@ class RouletteModule(BaseModule):
                     '1. Show results in chat',
                     '2. Show results in whispers',
                     '3. Show results in chat if it\'s over X points else it will be whispered.',
+                    '4. Combine output in chat',
                     ]),
             ModuleSetting(
                 key='min_show_points',
@@ -138,15 +139,18 @@ class RouletteModule(BaseModule):
     def __init__(self):
         super().__init__()
         self.last_sub = None
+        self.output_buffer = ''
+        self.output_buffer_args = []
+        self.last_add = None
 
     def load_commands(self, **options):
-        self.commands['roulette'] = Command.raw_command(self.roulette,
+        self.commands['roulette'] = pajbot.models.command.Command.raw_command(self.roulette,
                 delay_all=self.settings['online_global_cd'],
                 delay_user=self.settings['online_user_cd'],
                 description='Roulette for points',
                 can_execute_with_whisper=self.settings['can_execute_with_whisper'],
                 examples=[
-                    CommandExample(None, 'Roulette for 69 points',
+                    pajbot.models.command.CommandExample(None, 'Roulette for 69 points',
                         chat='user:!roulette 69\n'
                         'bot:pajlada won 69 points in roulette! FeelsGoodMan',
                         description='Do a roulette for 69 points').parse(),
@@ -172,28 +176,11 @@ class RouletteModule(BaseModule):
             return False
 
         msg_split = message.split(' ')
-        if msg_split[0].lower() in ('all', 'allin'):
-            bet = user.points_available()
-        elif msg_split[0].endswith('%'):
-            try:
-                percentage = int(msg_split[0][:-1])
-                if percentage < 1 or percentage > 100:
-                    bot.whisper(user.username, 'To bet with percentages you need to specify a number between 1 and 100 (like !roulette 50%)')
-                    return False
-
-                bet = math.floor(user.points_available() * (percentage / 100))
-            except (ValueError, TypeError):
-                bot.whisper(user.username, 'Invalid percentage specified haHAA')
-                return False
-        else:
-            try:
-                message = message.lower()
-                message = message.replace('k', '000')
-                message = message.replace('m', '000000')
-                bet = int(message.split(' ')[0])
-            except (ValueError, TypeError):
-                bot.whisper(user.username, 'I didn\'t recognize your bet! Usage: !roulette 150 to bet 150 points')
-                return False
+        try:
+            bet = pajbot.utils.parse_points_amount(user, msg_split[0])
+        except pajbot.exc.InvalidPointAmount as e:
+            bot.whisper(user.username, str(e))
+            return False
 
         if not user.can_afford(bet):
             bot.whisper(user.username, 'You don\'t have enough points to do a roulette for {} points :('.format(bet))
@@ -215,7 +202,8 @@ class RouletteModule(BaseModule):
         arguments = {
             'bet': bet,
             'user': user.username_raw,
-            'points': user.points_available()
+            'points': user.points_available(),
+            'win': points > 0,
         }
 
         if points > 0:
@@ -223,6 +211,8 @@ class RouletteModule(BaseModule):
         else:
             out_message = self.get_phrase('message_lost', **arguments)
 
+        if self.settings['options_output'] == '4. Combine output in chat':
+            self.add_message(bot, arguments)
         if self.settings['options_output'] == '1. Show results in chat':
             bot.me(out_message)
         if self.settings['options_output'] == '2. Show results in whispers':
@@ -234,6 +224,45 @@ class RouletteModule(BaseModule):
                 bot.whisper(user.username, out_message)
 
         HandlerManager.trigger('on_roulette_finish', user, points)
+
+    def on_tick(self):
+        if self.output_buffer == '':
+            return
+
+        if self.last_add is None:
+            return
+
+        diff = datetime.datetime.now() - self.last_add
+
+        if diff.seconds > 3:
+            self.flush_output_buffer()
+
+    def flush_output_buffer(self):
+        msg = self.output_buffer
+        self.bot.me(msg)
+        self.output_buffer = ''
+        self.output_buffer_args = []
+
+    def add_message(self, bot, arguments):
+        parts = []
+        new_buffer = 'Roulette: '
+        for arg in self.output_buffer_args:
+            parts.append('{} {} {}{}'.format('PogChamp' if arg['win'] else 'PepeHands', arg['user'], '+' if arg['win'] else '-', arg['bet']))
+
+        parts.append('{} {} {}{}'.format('PogChamp' if arguments['win'] else 'PepeHands', arguments['user'], '+' if arguments['win'] else '-', arguments['bet']))
+
+        log.debug(parts)
+        new_buffer = new_buffer+ ', '.join(parts)
+
+        if len(new_buffer) > 480:
+            self.flush_output_buffer()
+        else:
+            self.output_buffer = new_buffer
+            log.info('Set output buffer to ' + new_buffer)
+
+        self.output_buffer_args.append(arguments)
+
+        self.last_add = datetime.datetime.now()
 
     def on_user_sub(self, user):
         self.last_sub = datetime.datetime.now()
@@ -250,7 +279,9 @@ class RouletteModule(BaseModule):
 
         HandlerManager.add_handler('on_user_sub', self.on_user_sub)
         HandlerManager.add_handler('on_user_resub', self.on_user_resub)
+        HandlerManager.add_handler('on_tick', self.on_tick)
 
     def disable(self, bot):
         HandlerManager.remove_handler('on_user_sub', self.on_user_sub)
         HandlerManager.remove_handler('on_user_resub', self.on_user_resub)
+        HandlerManager.remove_handler('on_tick', self.on_tick)

@@ -8,6 +8,8 @@ app = Flask(
         template_folder=os.path.join(os.path.dirname(os.path.abspath(__file__ + '/../..')), 'templates'),
         )
 
+app.url_map.strict_slashes = False
+
 
 def init(args):
     import configparser
@@ -18,24 +20,22 @@ def init(args):
 
     from flask import request
     from flask import session
-    from flask.ext.scrypt import generate_random_salt
+    from flask_scrypt import generate_random_salt
 
     import pajbot.web.common
     import pajbot.web.routes
     from pajbot.bot import Bot
-    from pajbot.managers import DBManager
-    from pajbot.managers import RedisManager
-    from pajbot.managers import TimeManager
+    from pajbot.managers.db import DBManager
+    from pajbot.managers.redis import RedisManager
+    from pajbot.managers.time import TimeManager
     from pajbot.models.module import ModuleManager
     from pajbot.models.sock import SocketClientManager
     from pajbot.streamhelper import StreamHelper
-    from pajbot.tbutil import load_config
+    from pajbot.utils import load_config
     from pajbot.web.models import errors
     from pajbot.web.utils import download_logo
 
     log = logging.getLogger(__name__)
-
-    log.info('XD')
 
     config = configparser.ConfigParser()
 
@@ -50,12 +50,16 @@ def init(args):
         salt = generate_random_salt()
         config.set('web', 'pleblist_password_salt', salt.decode('utf-8'))
 
+    if 'pleblist_password' not in config['web']:
+        salt = generate_random_salt()
+        config.set('web', 'pleblist_password', salt.decode('utf-8'))
+
     if 'secret_key' not in config['web']:
         salt = generate_random_salt()
         config.set('web', 'secret_key', salt.decode('utf-8'))
 
     if 'logo' not in config['web']:
-        res = download_logo(config['main']['streamer'])
+        res = download_logo(config['webtwitchapi']['client_id'], config['main']['streamer'])
         if res:
             config.set('web', 'logo', 'set')
 
@@ -94,7 +98,7 @@ def init(args):
 
     app.register_blueprint(pajbot.web.routes.clr.page)
 
-    errors.init(app)
+    errors.init(app, config)
     pajbot.web.routes.clr.config = config
 
     version = Bot.version
@@ -134,28 +138,6 @@ def init(args):
             'session': session,
             'google_analytics': config['web'].get('google_analytics', None),
             }
-
-    if 'streamtip' in config:
-        default_variables['streamtip_data'] = {
-                'client_id': config['streamtip']['client_id'],
-                'redirect_uri': config['streamtip']['redirect_uri'],
-                }
-    else:
-        default_variables['streamtip_data'] = {
-                'client_id': 'MISSING',
-                'redirect_uri': 'MISSING',
-                }
-
-    if 'twitchalerts' in config:
-        default_variables['twitchalerts_data'] = {
-                'client_id': config['twitchalerts']['client_id'],
-                'redirect_uri': config['twitchalerts']['redirect_uri'],
-                }
-    else:
-        default_variables['twitchalerts_data'] = {
-                'client_id': 'MISSING',
-                'redirect_uri': 'MISSING',
-                }
 
     @app.context_processor
     def current_time():

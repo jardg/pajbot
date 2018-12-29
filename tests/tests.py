@@ -60,7 +60,7 @@ class TestURLMethods(unittest2.TestCase):
 class ActionsTester(unittest2.TestCase):
     def setUp(self):
         from pajbot.bot import Bot
-        from pajbot.tbutil import load_config
+        from pajbot.utils import load_config
         import datetime
 
         config = load_config('config.ini')
@@ -166,6 +166,7 @@ class ActionsTester(unittest2.TestCase):
             self.assertEqual(len(action.subs), data['num_subs'], 'Wrong amount of substitutions for "{0}"'.format(data['message']))
             self.assertEqual(response, data['result'], 'Got output "{}", expected "{}"'.format(response, data['result']))
             """
+
 
 if __name__ == '__main__':
     unittest2.main()

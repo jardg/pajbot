@@ -3,8 +3,8 @@ import re
 
 from sqlalchemy import func
 
-from pajbot.managers import AdminLogManager
-from pajbot.managers import DBManager
+from pajbot.managers.adminlog import AdminLogManager
+from pajbot.managers.db import DBManager
 from pajbot.models.user import User
 
 log = logging.getLogger(__name__)
@@ -505,7 +505,7 @@ class Dispatch:
         log.debug(args)
 
         log.debug('timeouting {0}'.format(source.username))
-        bot.timeout(source.username, _time)
+        bot.timeout(source.username, _time, reason='Matched bad filter')
 
     def single_timeout_source(bot, source, message, event, args):
         if 'time' in args:
@@ -568,6 +568,26 @@ class Dispatch:
         try:
             ord_code = ord(message[0])
             bot.say(str(ord_code))
+        except:
+            return False
+
+    def do_hex(bot, source, message, event, args):
+        print('a')
+        if not message:
+            return False
+
+        try:
+            hex_code = hex(ord(message[0]))
+            bot.say(hex_code)
+        except:
+            return False
+
+    def hex_to_chr(bot, source, message, event, args):
+        if not message:
+            return False
+
+        try:
+            bot.say(str(chr(int(message))))
         except:
             return False
 

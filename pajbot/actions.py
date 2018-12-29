@@ -1,5 +1,8 @@
+import logging
 import queue
 import threading
+
+log = logging.getLogger(__name__)
 
 
 class Action:

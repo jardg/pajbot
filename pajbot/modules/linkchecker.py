@@ -10,15 +10,14 @@ from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy.dialects.mysql import TEXT
 
+import pajbot.managers
+import pajbot.models
 from pajbot.actions import Action
 from pajbot.actions import ActionQueue
 from pajbot.apiwrappers import SafeBrowsingAPI
-from pajbot.managers import AdminLogManager
-from pajbot.managers import Base
-from pajbot.managers import DBManager
-from pajbot.managers import HandlerManager
-from pajbot.models.command import Command
-from pajbot.models.command import CommandExample
+from pajbot.managers.adminlog import AdminLogManager
+from pajbot.managers.db import Base
+from pajbot.managers.db import DBManager
 from pajbot.modules import BaseModule
 from pajbot.modules import ModuleSetting
 
@@ -156,7 +155,24 @@ class LinkCheckerModule(BaseModule):
                 label='Disallow links from non-subscribers',
                 type='boolean',
                 required=True,
-                default=False)
+                default=False),
+            ModuleSetting(
+                key='ban_sub_links',
+                label='Disallow links from subscribers',
+                type='boolean',
+                required=True,
+                default=False),
+            ModuleSetting(
+                key='timeout_length',
+                label='Timeout length',
+                type='number',
+                required=True,
+                placeholder='Timeout length in seconds',
+                default=60,
+                constraints={
+                    'min_value': 1,
+                    'max_value': 3600,
+                    }),
             ]
 
     def __init__(self):
@@ -174,8 +190,8 @@ class LinkCheckerModule(BaseModule):
 
     def enable(self, bot):
         self.bot = bot
-        HandlerManager.add_handler('on_message', self.on_message, priority=100)
-        HandlerManager.add_handler('on_commit', self.on_commit)
+        pajbot.managers.handler.HandlerManager.add_handler('on_message', self.on_message, priority=100)
+        pajbot.managers.handler.HandlerManager.add_handler('on_commit', self.on_commit)
         if bot:
             self.run_later = bot.execute_delayed
 
@@ -201,8 +217,8 @@ class LinkCheckerModule(BaseModule):
             self.whitelisted_links.append(link)
 
     def disable(self, bot):
-        HandlerManager.remove_handler('on_message', self.on_message)
-        HandlerManager.remove_handler('on_commit', self.on_commit)
+        pajbot.managers.handler.HandlerManager.remove_handler('on_message', self.on_message)
+        pajbot.managers.handler.HandlerManager.remove_handler('on_commit', self.on_commit)
 
         if self.db_session is not None:
             self.db_session.commit()
@@ -216,30 +232,42 @@ class LinkCheckerModule(BaseModule):
         log.info('Loaded {0} bad links and {1} good links'.format(len(self.blacklisted_links), len(self.whitelisted_links)))
         return self
 
-    super_whitelist = ['pajlada.se', 'pajlada.com', 'forsen.tv', 'pajbot.com']
+    super_whitelist = ['pajlada.se', 'pajlada.com', 'forsen.tv', 'pajbot.com', 'inboxesbot.com', 'inboxes.tv']
 
     def on_message(self, source, message, emotes, whisper, urls, event):
         if not whisper and source.level < 500 and source.moderator is False:
-            if self.settings['ban_pleb_links'] is True and source.subscriber is False and len(urls) > 0:
-                # Check if the links are in our super-whitelist. i.e. on the pajlada.se domain o forsen.tv
-                for url in urls:
-                    parsed_url = Url(url)
-                    if len(parsed_url.parsed.netloc.split('.')) < 2:
-                        continue
-                    whitelisted = False
-                    for whitelist in self.super_whitelist:
-                        if is_subdomain(parsed_url.parsed.netloc, whitelist):
-                            whitelisted = True
-                            break
-                    if whitelisted is False:
-                        self.bot.timeout(source.username, 30)
-                        if source.minutes_in_chat_online > 60:
-                            self.bot.whisper(source.username, 'You cannot post non-verified links in chat if you\'re not a subscriber.')
-                        return False
+            if len(urls) > 0:
+                do_timeout = False
+                ban_reason = 'You are not allowed to post links in chat'
+                whisper_reason = '??? KKona'
+
+                if self.settings['ban_pleb_links'] is True and source.subscriber is False:
+                    do_timeout = True
+                    whisper_reason = 'You cannot post non-verified links in chat if you\'re not a subscriber.'
+                elif self.settings['ban_sub_links'] is True and source.subscriber is True:
+                    do_timeout = True
+                    whisper_reason = 'You cannot post non-verified links in chat.'
+
+                if do_timeout is True:
+                    # Check if the links are in our super-whitelist. i.e. on the pajlada.se domain o forsen.tv
+                    for url in urls:
+                        parsed_url = Url(url)
+                        if len(parsed_url.parsed.netloc.split('.')) < 2:
+                            continue
+                        whitelisted = False
+                        for whitelist in self.super_whitelist:
+                            if is_subdomain(parsed_url.parsed.netloc, whitelist):
+                                whitelisted = True
+                                break
+                        if whitelisted is False:
+                            self.bot.timeout(source.username, 30, reason=ban_reason)
+                            if source.minutes_in_chat_online > 60:
+                                self.bot.whisper(source.username, whisper_reason)
+                            return False
 
             for url in urls:
                 # Action which will be taken when a bad link is found
-                action = Action(self.bot.timeout, args=[source.username, 20])
+                action = Action(self.bot.timeout, args=[source.username, self.settings['timeout_length']], kwargs={'reason': 'Banned link'})
                 # First we perform a basic check
                 if self.simple_check(url, action) == self.RET_FURTHER_ANALYSIS:
                     # If the basic check returns no relevant data, we queue up a proper check on the URL
@@ -558,41 +586,41 @@ class LinkCheckerModule(BaseModule):
         return
 
     def load_commands(self, **options):
-        self.commands['add'] = Command.multiaction_command(
+        self.commands['add'] = pajbot.models.command.Command.multiaction_command(
                 level=100,
                 delay_all=0,
                 delay_user=0,
                 default=None,
                 command='add',
                 commands={
-                    'link': Command.multiaction_command(
+                    'link': pajbot.models.command.Command.multiaction_command(
                         level=500,
                         delay_all=0,
                         delay_user=0,
                         default=None,
                         commands={
-                            'blacklist': Command.raw_command(self.add_link_blacklist,
+                            'blacklist': pajbot.models.command.Command.raw_command(self.add_link_blacklist,
                                 level=500,
                                 delay_all=0,
                                 delay_user=0,
                                 description='Blacklist a link',
                                 examples=[
-                                    CommandExample(None, 'Add a link to the blacklist for a shallow search',
+                                    pajbot.models.command.CommandExample(None, 'Add a link to the blacklist for a shallow search',
                                         chat='user:!add link blacklist --shallow scamlink.lonk/\n'
                                         'bot>user:Successfully added your links',
                                         description='Added the link scamlink.lonk/ to the blacklist for a shallow search').parse(),
-                                    CommandExample(None, 'Add a link to the blacklist for a deep search',
+                                    pajbot.models.command.CommandExample(None, 'Add a link to the blacklist for a deep search',
                                         chat='user:!add link blacklist --deep scamlink.lonk/\n'
                                         'bot>user:Successfully added your links',
                                         description='Added the link scamlink.lonk/ to the blacklist for a deep search').parse(),
                                     ]),
-                            'whitelist': Command.raw_command(self.add_link_whitelist,
+                            'whitelist': pajbot.models.command.Command.raw_command(self.add_link_whitelist,
                                 level=500,
                                 delay_all=0,
                                 delay_user=0,
                                 description='Whitelist a link',
                                 examples=[
-                                    CommandExample(None, 'Add a link to the whitelist',
+                                    pajbot.models.command.CommandExample(None, 'Add a link to the whitelist',
                                         chat='user:!add link whitelink safelink.lonk/\n'
                                         'bot>user:Successfully added your links',
                                         description='Added the link safelink.lonk/ to the whitelist').parse(),
@@ -602,37 +630,37 @@ class LinkCheckerModule(BaseModule):
                     }
                 )
 
-        self.commands['remove'] = Command.multiaction_command(
+        self.commands['remove'] = pajbot.models.command.Command.multiaction_command(
                 level=100,
                 delay_all=0,
                 delay_user=0,
                 default=None,
                 command='remove',
                 commands={
-                    'link': Command.multiaction_command(
+                    'link': pajbot.models.command.Command.multiaction_command(
                         level=500,
                         delay_all=0,
                         delay_user=0,
                         default=None,
                         commands={
-                            'blacklist': Command.raw_command(self.remove_link_blacklist,
+                            'blacklist': pajbot.models.command.Command.raw_command(self.remove_link_blacklist,
                                 level=500,
                                 delay_all=0,
                                 delay_user=0,
                                 description='Remove a link from the blacklist.',
                                 examples=[
-                                    CommandExample(None, 'Remove a link from the blacklist.',
+                                    pajbot.models.command.CommandExample(None, 'Remove a link from the blacklist.',
                                         chat='user:!remove link blacklist 20\n'
                                         'bot>user:Successfully removed blacklisted link with id 20',
                                         description='Remove a link from the blacklist with an ID').parse(),
                                     ]),
-                            'whitelist': Command.raw_command(self.remove_link_whitelist,
+                            'whitelist': pajbot.models.command.Command.raw_command(self.remove_link_whitelist,
                                 level=500,
                                 delay_all=0,
                                 delay_user=0,
                                 description='Remove a link from the whitelist.',
                                 examples=[
-                                    CommandExample(None, 'Remove a link from the whitelist.',
+                                    pajbot.models.command.CommandExample(None, 'Remove a link from the whitelist.',
                                         chat='user:!remove link whitelist 12\n'
                                         'bot>user:Successfully removed blacklisted link with id 12',
                                         description='Remove a link from the whitelist with an ID').parse(),

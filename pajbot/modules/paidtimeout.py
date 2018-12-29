@@ -2,9 +2,8 @@ import datetime
 import logging
 import math
 
-from pajbot.managers import HandlerManager
-from pajbot.models.command import Command
-from pajbot.models.command import CommandExample
+import pajbot.models
+from pajbot.managers.handler import HandlerManager
 from pajbot.modules import BaseModule
 from pajbot.modules import ModuleSetting
 
@@ -113,11 +112,11 @@ class PaidTimeoutModule(BaseModule):
         if message is None or len(message) == 0:
             return False
 
-        username = message.split(' ')[0]
-        if len(username) < 2:
+        target = message.split(' ')[0]
+        if len(target) < 2:
             return False
 
-        with bot.users.find_context(username) as victim:
+        with bot.users.find_context(target) as victim:
             if victim is None:
                 bot.whisper(source.username, 'This user does not exist FailFish')
                 return False
@@ -147,13 +146,14 @@ class PaidTimeoutModule(BaseModule):
                     victim=victim,
                     source=source,
                     time=_time))
-                bot.whisper(source.username, 'You just used {0} points to time out {1} for an additional {2} seconds.'.format(_cost, username, _time))
+                bot.whisper(source.username, 'You just used {0} points to time out {1} for an additional {2} seconds.'.format(_cost, victim.username, _time))
                 num_seconds = int((victim.timeout_end - now).total_seconds())
-                bot._timeout(username, num_seconds)
+                bot._timeout(victim.username, num_seconds, reason='Timed out by {}'.format(source.username_raw))
+            # songs = session.query(PleblistSong, func.count(PleblistSong.song_info).label('total')).group_by(PleblistSong.youtube_id).order_by('total DESC')
             else:
-                bot.whisper(source.username, 'You just used {0} points to time out {1} for {2} seconds.'.format(_cost, username, _time))
-                bot.whisper(username, '{0} just timed you out for {1} seconds. /w {2} !$unbanme to unban yourself for points forsenMoney'.format(source.username, _time, bot.nickname))
-                bot._timeout(username, _time)
+                bot.whisper(source.username, 'You just used {0} points to time out {1} for {2} seconds.'.format(_cost, victim.username, _time))
+                bot.whisper(victim.username, '{0} just timed you out for {1} seconds. /w {2} !$unbanme to unban yourself for points forsenMoney'.format(source.username, _time, bot.nickname))
+                bot._timeout(victim.username, _time, reason='Timed out by {}'.format(source.username_raw))
                 victim.timed_out = True
                 victim.timeout_start = now
                 victim.timeout_end = now + datetime.timedelta(seconds=_time)
@@ -187,21 +187,21 @@ class PaidTimeoutModule(BaseModule):
         return self.base_paid_timeout(bot, source, message, _time, _cost)
 
     def load_commands(self, **options):
-        self.commands[self.settings['command_name'].lower().replace('!', '').replace(' ', '')] = Command.raw_command(
+        self.commands[self.settings['command_name'].lower().replace('!', '').replace(' ', '')] = pajbot.models.command.Command.raw_command(
             self.paid_timeout,
             cost=self.settings['cost'],
             examples=[
-                    CommandExample(None, 'Timeout someone for {0} seconds'.format(self.settings['timeout_length']),
+                    pajbot.models.command.CommandExample(None, 'Timeout someone for {0} seconds'.format(self.settings['timeout_length']),
                         chat='user:!{0} paja\n'
                         'bot>user: You just used {1} points to time out paja for an additional {2} seconds.'.format(self.settings['command_name'], self.settings['cost'], self.settings['timeout_length']),
                         description='').parse(),
                     ])
         if self.settings['second_command']:
-            self.commands[self.settings['command_name2'].lower().replace('!', '').replace(' ', '')] = Command.raw_command(
+            self.commands[self.settings['command_name2'].lower().replace('!', '').replace(' ', '')] = pajbot.models.command.Command.raw_command(
                 self.paid_timeout2,
                 cost=self.settings['cost2'],
                 examples=[
-                    CommandExample(None, 'Timeout someone for {0} seconds'.format(self.settings['timeout_length2']),
+                    pajbot.models.command.CommandExample(None, 'Timeout someone for {0} seconds'.format(self.settings['timeout_length2']),
                         chat='user:!{0} paja\n'
                         'bot>user: You just used {1} points to time out paja for an additional {2} seconds.'.format(self.settings['command_name2'], self.settings['cost2'], self.settings['timeout_length2']),
                         description='').parse(),

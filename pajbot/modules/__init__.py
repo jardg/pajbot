@@ -11,6 +11,7 @@ from pajbot.modules.basic.bttvemotes import BTTVEmotesModule
 from pajbot.modules.basic.checkmod import CheckModModule
 from pajbot.modules.basic.dbmanage import DBManageModule
 from pajbot.modules.basic.debug import DebugModule
+from pajbot.modules.basic.ffzemotes import FFZEmotesModule
 from pajbot.modules.basic.ignore import IgnoreModule
 from pajbot.modules.basic.permaban import PermabanModule
 from pajbot.modules.basic.pointsreset import PointsResetModule
@@ -38,6 +39,7 @@ from pajbot.modules.linktracker import LinkTrackerLink
 from pajbot.modules.linktracker import LinkTrackerModule
 from pajbot.modules.math import MathModule
 from pajbot.modules.maxmsglength import MaxMsgLengthModule
+from pajbot.modules.casechecker import CaseCheckerModule
 from pajbot.modules.paidsubmode import PaidSubmodeModule
 from pajbot.modules.paidtimeout import PaidTimeoutDiscountModule
 from pajbot.modules.paidtimeout import PaidTimeoutModule
@@ -57,6 +59,7 @@ from pajbot.modules.quests.winhsbetpoints import WinHsBetPointsQuestModule
 from pajbot.modules.quests.winhsbetwins import WinHsBetWinsQuestModule
 from pajbot.modules.quests.winraffle import WinRaffleQuestModule
 from pajbot.modules.raffle import RaffleModule
+from pajbot.modules.repspam import RepspamModule
 from pajbot.modules.roulette import RouletteModule
 from pajbot.modules.subalert import SubAlertModule
 from pajbot.modules.tokencommands.playsound import PlaySoundTokenCommandModule
@@ -85,6 +88,7 @@ available_modules = [
         EightBallModule,
         EmoteComboModule,
         EmotesOnScreenModule,
+        FFZEmotesModule,
         FollowAgeModule,
         GetTimedOutQuestModule,
         GivePointsModule,
@@ -98,6 +102,7 @@ available_modules = [
         LinkTrackerModule,
         MathModule,
         MaxMsgLengthModule,
+        CaseCheckerModule,
         PaidSubmodeModule,
         PaidTimeoutDiscountModule,
         PaidTimeoutModule,
@@ -112,6 +117,7 @@ available_modules = [
         PyramidModule,
         QuestModule,
         RaffleModule,
+        RepspamModule,
         RouletteModule,
         ShowEmoteTokenCommandModule,
         SubAlertModule,

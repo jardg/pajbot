@@ -11,13 +11,13 @@ from flask import abort
 from flask import make_response
 from flask import request
 from flask import session
-from flask.ext.scrypt import generate_password_hash
 from flask_restful import reqparse
+from flask_scrypt import generate_password_hash
 
 import pajbot.exc
-from pajbot.managers import DBManager
-from pajbot.managers import RedisManager
-from pajbot.models.command import CommandManager
+import pajbot.managers
+from pajbot.managers.db import DBManager
+from pajbot.managers.redis import RedisManager
 from pajbot.models.module import ModuleManager
 from pajbot.models.user import User
 from pajbot.streamhelper import StreamHelper
@@ -61,11 +61,11 @@ def nocache(view):
     return update_wrapper(no_cache, view)
 
 
-def download_logo(streamer):
+def download_logo(client_id, streamer):
     import urllib
     from pajbot.apiwrappers import TwitchAPI
 
-    twitchapi = TwitchAPI()
+    twitchapi = TwitchAPI(client_id)
     try:
         data = twitchapi.get(['users', streamer], base='https://api.twitch.tv/kraken/')
         log.info(data)
@@ -98,7 +98,7 @@ def get_cached_commands():
     commands = redis.get(commands_key)
     if commands is None:
         log.debug('Updating commands...')
-        bot_commands = CommandManager(
+        bot_commands = pajbot.managers.command.CommandManager(
                 socket_manager=None,
                 module_manager=ModuleManager(None).load(),
                 bot=None).load(load_examples=True)
@@ -133,7 +133,13 @@ def init_json_serializer(api):
         return resp
 
 
-def jsonify_list(key, query, base_url=None, default_limit=None, max_limit=None):
+def jsonify_query(query):
+    return [v.jsonify() for v in query]
+
+
+def jsonify_list(key, query, base_url=None,
+        default_limit=None, max_limit=None,
+        jsonify_method=jsonify_query):
     """ Must be called in the context of a request """
     _total = query.count()
 
@@ -164,11 +170,8 @@ def jsonify_list(key, query, base_url=None, default_limit=None, max_limit=None):
 
     payload = {
             '_total': _total,
-            key: [v.jsonify() for v in query],
+            key: jsonify_method(query),
             }
-
-    log.info(request.args)
-    log.info(request.__dict__)
 
     if base_url:
         payload['_links'] = {}
@@ -185,6 +188,7 @@ def jsonify_list(key, query, base_url=None, default_limit=None, max_limit=None):
                 payload['_links']['prev'] = base_url + '?' + urllib.parse.urlencode([('limit', limit), ('offset', max(0, offset - limit))])
 
     return payload
+
 
 paginate_parser = reqparse.RequestParser()
 paginate_parser.add_argument('limit', type=int, required=False)
@@ -207,3 +211,23 @@ def create_pleblist_login(bot_config):
     """ Throws an InvalidLogin exception if the login was not good """
     salted_password = generate_password_hash(bot_config['web']['pleblist_password'], bot_config['web']['pleblist_password_salt'])
     return base64.b64encode(salted_password).decode('utf8')
+
+
+def seconds_to_vodtime(t):
+    s = int(t)
+    h = s / 3600
+    m = s % 3600 / 60
+    s = s % 60
+    return '%dh%02dm%02ds' % (h, m, s)
+
+
+def format_tb(tb, limit=None):
+    import traceback
+
+    stacktrace = traceback.extract_tb(tb)
+
+    ret = ''
+    for stack in stacktrace:
+        ret += '*{}*:{} ({}): {}\n'.format(stack[0], stack[1], stack[2], stack[3])
+
+    return ret

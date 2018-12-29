@@ -1,7 +1,6 @@
 import logging
 
-from pajbot.models.command import Command
-from pajbot.models.command import CommandExample
+import pajbot.models
 from pajbot.modules import BaseModule
 from pajbot.modules.basic import BasicCommandsModule
 
@@ -29,28 +28,43 @@ class BTTVEmotesModule(BaseModule):
         bot = options['bot']
 
         if len(bot.emotes.bttv_emote_manager.channel_emotes) > 0:
-            bot.say('Active BTTV Emotes in chat: {}'.format(' '.join(bot.emotes.bttv_emote_manager.channel_emotes)))
+            base_msg = 'BTTV Emotes:'
+            base_len = len(base_msg)
+            messages = []
+            tmp_message = base_msg
+            for emote in bot.emotes.bttv_emote_manager.channel_emotes:
+                if len(tmp_message) + len(emote) < 500:
+                    tmp_message += ' ' + emote
+                else:
+                    messages.append(tmp_message)
+                    tmp_message = base_msg + ' ' + emote
+
+            if len(tmp_message) > base_len:
+                messages.append(tmp_message)
+
+            for msg in messages:
+                bot.say(msg)
         else:
             bot.say('No BTTV Emotes active in this chat')
 
     def load_commands(self, **options):
-        get_cmd = Command.raw_command(self.get_bttv_emotes,
+        get_cmd = pajbot.models.command.Command.raw_command(self.get_bttv_emotes,
                 level=100,
-                delay_all=3,
-                delay_user=6,
+                delay_all=15,
+                delay_user=60,
                 examples=[
-                    CommandExample(None, 'Show all active bttv emotes for this channel.',
+                    pajbot.models.command.CommandExample(None, 'Show all active bttv emotes for this channel.',
                         chat='user: !bttvemotes\n'
                         'bot: Active BTTV Emotes in chat: forsenPls gachiGASM',
                         description='').parse(),
                     ])
 
-        reload_cmd = Command.raw_command(self.reload_bttv_emotes,
+        reload_cmd = pajbot.models.command.Command.raw_command(self.reload_bttv_emotes,
                 level=500,
                 delay_all=10,
                 delay_user=20,
                 examples=[
-                    CommandExample(None, 'Reload all active bttv emotes for this channel.',
+                    pajbot.models.command.CommandExample(None, 'Reload all active bttv emotes for this channel.',
                         chat='user: !bttvemotes reload\n'
                         'bot>user: Reloading bttv emotes...',
                         description='').parse(),
@@ -58,7 +72,7 @@ class BTTVEmotesModule(BaseModule):
 
         # The ' ' is there to make things look good in the
         # web interface.
-        self.commands['bttvemotes'] = Command.multiaction_command(
+        self.commands['bttvemotes'] = pajbot.models.command.Command.multiaction_command(
                 level=100,
                 default=' ',
                 fallback=' ',

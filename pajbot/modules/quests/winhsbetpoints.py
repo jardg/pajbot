@@ -2,8 +2,8 @@ import logging
 
 from numpy import random
 
-from pajbot.managers import HandlerManager
-from pajbot.managers import RedisManager
+from pajbot.managers.handler import HandlerManager
+from pajbot.managers.redis import RedisManager
 from pajbot.modules import ModuleSetting
 from pajbot.modules import QuestModule
 from pajbot.modules.quests import BaseQuest
@@ -45,7 +45,6 @@ class WinHsBetPointsQuestModule(BaseQuest):
             ]
 
     LIMIT = 1
-    REWARD = 5
 
     def __init__(self):
         super().__init__()
@@ -66,7 +65,7 @@ class WinHsBetPointsQuestModule(BaseQuest):
         redis = RedisManager.get()
 
         if user_progress >= self.hsbet_points_required:
-            user.award_tokens(self.REWARD, redis=redis)
+            self.finish_quest(redis, user)
 
         self.set_user_progress(user.username, user_progress, redis=redis)
 

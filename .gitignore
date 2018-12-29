@@ -3,9 +3,6 @@ __pycache__
 *.py[cod]
 *$py.class
 
-# Folder created by pip
-src/
-
 # system files
 .DS_Store
 
@@ -23,11 +20,6 @@ config.ini
 
 # User created code
 userdispatch.py
-
-node_modules
-
-# This is created when the user installs semantic.json
-semantic.json
 
 # Ignore virtual environment folder
 myvenv/

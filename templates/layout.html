@@ -11,16 +11,15 @@
     background-size: 100%;
 }
 </style>
-{% assets 'semantic_css' %}
-<link rel="stylesheet" type="text/css" href="{{ ASSET_URL }}">
-{% endassets %}
-{% assets 'base_css' %}
+<link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.2.7/semantic.min.css">
+{% assets "base_css" %}
 <link rel="stylesheet" type="text/css" href="{{ ASSET_URL }}">
 {% endassets %}
 <link rel="stylesheet" type="text/css" href="//cdn.pajlada.se/css/pickadate/default.css">
 <link rel="stylesheet" type="text/css" href="//cdn.pajlada.se/css/pickadate/default.date.css">
 </head>
 <body class="main body">
+    <!--<h3>fixing website atm <img src="https://pbs.twimg.com/profile_images/612293854511919104/__arQ929.jpg"/></h3>-->
 {% set active_page = active_page|default('home') %}
 <header class="main header">
 {% block menu %}
@@ -66,6 +65,7 @@
           <div class="ui inverted link list">
            <a class="item" href="https://github.com/pajlada/pajbot/issues"><i class="warning circle icon"></i> Submit an Issue</a>
            <a class="item" href="/contact"><i class="mail icon"></i> Contact</a>
+           <a class="item" href="https://twitter.com/pajlada"><i class="twitter icon"></i> Created by @pajlada</a>
           </div>
         </div>
         <div class="three wide column">
@@ -101,9 +101,7 @@ var bot_name = '{{ bot.name }}';
 </script>
 <script src="//ajax.googleapis.com/ajax/libs/jquery/2.1.4/jquery.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-cookie/1.4.1/jquery.cookie.min.js"></script>
-{%- assets 'semantic_js' %}
-<script type="text/javascript" src="{{ ASSET_URL }}"></script>
-{% endassets -%}
+<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.2.7/semantic.min.js"></script>
 {%- assets 'base_js' %}
 <script type="text/javascript" src="{{ ASSET_URL }}"></script>
 {% endassets -%}

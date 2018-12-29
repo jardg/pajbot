@@ -207,6 +207,64 @@ class BTTVApi(APIBase):
         return emotes
 
 
+class FFZApi(APIBase):
+    def __init__(self, strict=True):
+        APIBase.__init__(self, strict)
+
+        self.base_url = 'https://api.frankerfacez.com/v1/'
+        self.headers = {}
+
+    def get_global_emotes(self):
+        """Returns a list of global FFZ emotes in the standard Emote format."""
+
+        emotes = []
+        try:
+            data = self.get(['set', 'global'])
+
+            for emote_set in data['sets']:
+                for emote in data['sets'][emote_set]['emoticons']:
+                    emotes.append({'emote_hash': emote['id'], 'code': emote['name']})
+        except urllib.error.HTTPError as e:
+            if e.code == 502:
+                log.warning('Bad Gateway when getting global emotes.')
+            elif e.code == 503:
+                log.warning('Service Unavailable when getting global emotes.')
+            else:
+                log.exception('Unhandled HTTP error code')
+        except KeyError:
+            log.exception('Caught exception while trying to get global FFZ emotes')
+        except:
+            log.exception('Uncaught exception in FFZApi.get_global_emotes')
+
+        return emotes
+
+    def get_channel_emotes(self, channel):
+        """Returns a list of channel-specific FFZ emotes in the standard Emote format."""
+
+        emotes = []
+        try:
+            data = self.get(['room', channel])
+
+            for emote_set in data['sets']:
+                for emote in data['sets'][emote_set]['emoticons']:
+                    emotes.append({'emote_hash': emote['id'], 'code': emote['name']})
+        except urllib.error.HTTPError as e:
+            if e.code == 502:
+                log.warning('Bad Gateway when getting channel emotes.')
+            elif e.code == 503:
+                log.warning('Service Unavailable when getting channel emotes.')
+            elif e.code == 404:
+                log.info('There are no FFZ Emotes for this channel.')
+            else:
+                log.exception('Unhandled HTTP error code')
+        except KeyError:
+            log.exception('Caught exception while trying to get channel-specific FFZ emotes')
+        except:
+            log.exception('Uncaught exception in FFZApi.get_channel_emotes')
+
+        return emotes
+
+
 class TwitchAPI(APIBase):
     def __init__(self, client_id=None, oauth=None, strict=True):
         """
@@ -233,7 +291,8 @@ class TwitchAPI(APIBase):
     def parse_datetime(datetime_str):
         """Parses date strings in the format of 2015-09-11T23:01:11+00:00
         to a naive datetime object."""
-        return datetime.datetime.strptime(datetime_str[:-6], '%Y-%m-%dT%H:%M:%S')
+        trimmed_str = datetime_str[:19]
+        return datetime.datetime.strptime(trimmed_str, '%Y-%m-%dT%H:%M:%S')
 
     def get_subscribers(self, streamer, limit=25, offset=0, attempt=0):
         """Returns a list of subscribers within the limit+offset range.
@@ -326,9 +385,13 @@ class TwitchAPI(APIBase):
                 log.warning('Bad Gateway when getting stream status.')
             elif e.code == 503:
                 log.warning('Service Unavailable when getting stream status.')
+            elif e.code == 422:
+                # User is banned
+                pass
             else:
                 log.exception('Unhandled HTTP error code')
         except TypeError:
+            log.warning(data)
             log.warning('Somehow, the get request returned None')
             log.exception('Something went seriously wrong during the get-request')
         except KeyError:
@@ -361,6 +424,44 @@ class TwitchAPI(APIBase):
         """
         self.put(endpoints=['channels', streamer], data={'channel[status]': title}, base=self.kraken_url)
 
+    def get_follow_relationship2(self, username, streamer):
+        """Returns the follow relationship between the user and a streamer.
+
+        Returns False if `username` is not following `streamer`.
+        Otherwise, return a datetime object.
+
+        This value is cached in Redis FOREVER
+        """
+
+        # XXX TODO FIXME
+        from pajbot.managers.redis import RedisManager
+
+        redis = RedisManager.get()
+
+        fr_key = 'fr_GLOBAL_{username}_{streamer}'.format(username=username, streamer=streamer)
+        follow_relationship = redis.get(fr_key)
+
+        if follow_relationship is None:
+            try:
+                log.debug('fr2 api request')
+                data = self.get(endpoints=['users', username, 'follows', 'channels', streamer], base=self.kraken_url)
+                created_at = data['created_at']
+                redis.set(fr_key, value=created_at)
+                return TwitchAPI.parse_datetime(created_at)
+            except ValueError:
+                raise
+            except urllib.error.HTTPError:
+                redis.setex(fr_key, time=120, value='-1')
+                return False
+            except:
+                log.exception('Unhandled exception in get_follow_relationship')
+                return False
+        else:
+            if follow_relationship == '-1':
+                return False
+            else:
+                return TwitchAPI.parse_datetime(follow_relationship)
+
     def get_follow_relationship(self, username, streamer):
         """Returns the follow relationship between the user and a streamer.
 
@@ -384,6 +485,8 @@ class TwitchAPI(APIBase):
                 created_at = data['created_at']
                 redis.setex(fr_key, time=120, value=created_at)
                 return TwitchAPI.parse_datetime(created_at)
+            except ValueError:
+                raise
             except urllib.error.HTTPError:
                 redis.setex(fr_key, time=120, value='-1')
                 return False

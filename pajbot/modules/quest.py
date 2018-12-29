@@ -1,13 +1,13 @@
 import logging
 import random
 
-from pajbot.managers import HandlerManager
-from pajbot.managers import RedisManager
-from pajbot.models.command import Command
+import pajbot.models
+from pajbot.managers.handler import HandlerManager
+from pajbot.managers.redis import RedisManager
 from pajbot.modules import BaseModule
 from pajbot.modules import ModuleSetting
 from pajbot.streamhelper import StreamHelper
-from pajbot.tbutil import find
+from pajbot.utils import find
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +43,33 @@ class QuestModule(BaseModule):
                     'me',
                     'reply',
                     ]),
+            ModuleSetting(
+                key='reward_type',
+                label='Reward type',
+                type='options',
+                required=True,
+                default='tokens',
+                options=[
+                    'tokens',
+                    'points',
+                    ]),
+            ModuleSetting(
+                key='reward_amount',
+                label='Reward amount',
+                type='number',
+                required=True,
+                default=5,
+                ),
+            ModuleSetting(
+                key='max_tokens',
+                label='Max tokens',
+                type='number',
+                required=True,
+                default=15,
+                constraints={
+                    'min_value': 1,
+                    'max_value': 5000,
+                    }),
             ]
 
     def __init__(self):
@@ -92,7 +119,7 @@ class QuestModule(BaseModule):
         event = options['event']
         source = options['source']
 
-        message_tokens = '{0}, you have {1} tokens.'.format(source.username_raw, source.get_tokens())
+        message_tokens = '{0}, you have {1} tokens.'.format(source.username_raw, source.tokens)
 
         if self.settings['action_tokens'] == 'say':
             bot.say(message_tokens)
@@ -107,19 +134,19 @@ class QuestModule(BaseModule):
                 bot.whisper(source.username, message_tokens)
 
     def load_commands(self, **options):
-        self.commands['myprogress'] = Command.raw_command(
+        self.commands['myprogress'] = pajbot.models.command.Command.raw_command(
                 self.my_progress,
                 can_execute_with_whisper=True,
                 delay_all=0,
                 delay_user=10,
                 )
-        self.commands['currentquest'] = Command.raw_command(
+        self.commands['currentquest'] = pajbot.models.command.Command.raw_command(
                 self.get_current_quest,
                 can_execute_with_whisper=True,
                 delay_all=2,
                 delay_user=10,
                 )
-        self.commands['tokens'] = Command.raw_command(
+        self.commands['tokens'] = pajbot.models.command.Command.raw_command(
                 self.get_user_tokens,
                 can_execute_with_whisper=True,
                 delay_all=0,
@@ -135,6 +162,7 @@ class QuestModule(BaseModule):
             return False
 
         self.current_quest = random.choice(available_quests)
+        self.current_quest.quest_module = self
         self.current_quest.start_quest()
 
         redis = RedisManager.get()
@@ -164,21 +192,6 @@ class QuestModule(BaseModule):
             # No last stream ID found. why?
             return False
 
-        # XXX: Should we use a pipeline for any of this?
-        # Go through user tokens and remove any from more than 2 streams ago
-        for key in redis.keys('{streamer}:*:tokens'.format(streamer=StreamHelper.get_streamer())):
-            all_tokens = redis.hgetall(key)
-            for stream_id_str in all_tokens:
-                try:
-                    stream_id = int(stream_id_str)
-                except (TypeError, ValueError):
-                    log.error('Invalid stream id in tokens by {}'.format(key))
-                    continue
-
-                if last_stream_id - stream_id > 1:
-                    log.info('Removing tokens for stream {}'.format(stream_id))
-                    redis.hdel(key, stream_id)
-
     def on_loaded(self):
         if self.bot:
             self.current_quest_key = '{streamer}:current_quest'.format(streamer=self.bot.streamer)
@@ -198,6 +211,7 @@ class QuestModule(BaseModule):
                 if quest is not None:
                     log.info('Resumed quest {}'.format(quest.get_objective()))
                     self.current_quest = quest
+                    self.current_quest.quest_module = self
                     self.current_quest.start_quest()
                 else:
                     log.info('No quest with id {} found in submodules ({})'.format(current_quest_id, self.submodules))

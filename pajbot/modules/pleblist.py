@@ -3,9 +3,9 @@ import urllib
 
 from sqlalchemy import func
 
-from pajbot.managers import DBManager
-from pajbot.managers import ScheduleManager
-from pajbot.models.command import Command
+import pajbot.models
+from pajbot.managers.db import DBManager
+from pajbot.managers.schedule import ScheduleManager
 from pajbot.models.pleblist import PleblistManager
 from pajbot.models.pleblist import PleblistSong
 from pajbot.modules import BaseModule
@@ -64,7 +64,7 @@ class PleblistModule(BaseModule):
                 type='number',
                 required=True,
                 placeholder='Max song length (in seconds)',
-                default=600,
+                default=360,
                 constraints={
                     'min_value': 1,
                     'max_value': 3600,
@@ -116,7 +116,7 @@ class PleblistModule(BaseModule):
 
             # See if the user has already submitted X songs
             num_unplayed_songs_requested = int(db_session.query(func.count(PleblistSong.id)).filter_by(stream_id=stream_id, user_id=source.id, date_played=None).one()[0])
-            if num_unplayed_songs_requested >= self.settings['max_songs_per_user']:
+            if num_unplayed_songs_requested >= self.settings['max_songs_per_user'] and not force:
                 bot.whisper(source.username, 'You can only request {} songs at the same time!'.format(num_unplayed_songs_requested))
                 return False
 
@@ -166,7 +166,8 @@ class PleblistModule(BaseModule):
 
     def load_commands(self, **options):
         if self.settings['songrequest_command']:
-            self.commands['songrequest'] = Command.raw_command(self.pleblist_add_song,
+            self.commands['songrequest'] = pajbot.models.command.Command.raw_command(self.pleblist_add_song,
                     delay_all=0,
                     delay_user=3,
+                    notify_on_error=True,
                     cost=self.settings['point_cost'])

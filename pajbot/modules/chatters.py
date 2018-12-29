@@ -1,12 +1,12 @@
 import datetime
 import logging
 
-from pajbot.managers import DBManager
-from pajbot.managers import RedisManager
-from pajbot.managers import UserManager
+from pajbot.managers.db import DBManager
+from pajbot.managers.redis import RedisManager
+from pajbot.managers.user import UserManager
 from pajbot.models.user import User
 from pajbot.modules import BaseModule
-from pajbot.tbutil import time_method
+from pajbot.utils import time_method
 
 log = logging.getLogger(__name__)
 

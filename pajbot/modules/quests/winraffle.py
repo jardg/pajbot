@@ -1,6 +1,6 @@
 import logging
 
-from pajbot.managers import HandlerManager
+from pajbot.managers.handler import HandlerManager
 from pajbot.managers.redis import RedisManager
 from pajbot.modules import QuestModule
 from pajbot.modules.quests import BaseQuest
@@ -17,7 +17,6 @@ class WinRaffleQuestModule(BaseQuest):
     OBJECTIVE = 'win a raffle or an emote bingo'
 
     LIMIT = 1
-    REWARD = 5
 
     def on_paid_timeout(self, source, victim, cost):
         log.warn('{} just timed out {} for {} points'.format(source, victim, cost))
@@ -30,7 +29,7 @@ class WinRaffleQuestModule(BaseQuest):
 
         redis = RedisManager.get()
 
-        winner.award_tokens(self.REWARD, redis=redis)
+        self.finish_quest(redis, winner)
 
         self.set_user_progress(winner.username, user_progress, redis=redis)
 

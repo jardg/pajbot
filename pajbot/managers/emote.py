@@ -17,56 +17,171 @@ log = logging.getLogger(__name__)
 class BTTVEmoteManager:
     def __init__(self):
         from pajbot.apiwrappers import BTTVApi
-        self.bttv_api = BTTVApi()
-        self.global_emotes = []
+        self.api = BTTVApi()
+
+        # Key = Emote code (i.e. KKonaW)
+        # Value = Emote hash (i.e. ghjkfghfhjg23fhjg23fh34)
+        self.global_emotes = {}
+        self.channel_emotes = {}
+
+        # Proper syntax described in build_emote
+        self.valid_emotes = []
+
+        self.update_global_emotes()
+        self.load_cached_channel_emotes()
+        self.update_valid_emotes()
+
+    def load_cached_channel_emotes(self):
         streamer = StreamHelper.get_streamer()
-        _global_emotes = RedisManager.get().hgetall('global:emotes:bttv')
+
+        # Try to get the list of global emotes from redis
         try:
             _channel_emotes = RedisManager.get().hgetall('{streamer}:emotes:bttv_channel_emotes'.format(streamer=streamer))
         except:
             _channel_emotes = {}
 
-        self.channel_emotes = list(_channel_emotes.keys())
+        for code in _channel_emotes:
+            emote_hash = _channel_emotes[code]
+            self.channel_emotes[code] = emote_hash
 
-        _all_emotes = _global_emotes.copy()
-        _all_emotes.update(_channel_emotes)
+    def update_global_emotes(self):
+        # Try to get cached global emotes from redis
+        _global_emotes = RedisManager.get().get('global:emotes:bttv_global')
+        if _global_emotes and len(_global_emotes) > 0:
+            log.info('Got cached BTTV global emotes!')
+            _global_emotes = json.loads(_global_emotes)
+        else:
+            _global_emotes = self.api.get_global_emotes()
+            if _global_emotes and len(_global_emotes) > 0:
+                RedisManager.get().setex('global:emotes:bttv_global', time=3600, value=json.dumps(_global_emotes, separators=(',', ':')))
 
-        self.all_emotes = []
-        for emote_code, emote_hash in _all_emotes.items():
-            self.all_emotes.append(self.build_emote(emote_code, emote_hash))
+        if _global_emotes and len(_global_emotes) > 0:
+            self.global_emotes = {}
+            for emote in _global_emotes:
+                self.global_emotes[emote['code']] = emote['emote_hash']
 
-    def build_emote(self, emote_code, emote_hash):
-        return {
-                'code': emote_code,
-                'emote_hash': emote_hash,
-                'regex': re.compile('(?<![^ ]){0}(?![^ ])'.format(re.escape(emote_code))),
-                }
-
-    def update_emotes(self):
-        log.debug('Updating BTTV Emotes...')
-        global_emotes = self.bttv_api.get_global_emotes()
-        channel_emotes = self.bttv_api.get_channel_emotes(StreamHelper.get_streamer())
-
-        self.global_emotes = [emote['code'] for emote in global_emotes]
-        self.channel_emotes = [emote['code'] for emote in channel_emotes]
+    def update_channel_emotes(self):
+        _channel_emotes = self.api.get_channel_emotes(StreamHelper.get_streamer())
+        self.channel_emotes = {}
+        for emote in _channel_emotes:
+            self.channel_emotes[emote['code']] = emote['emote_hash']
 
         # Store channel emotes in redis
         streamer = StreamHelper.get_streamer()
         key = '{streamer}:emotes:bttv_channel_emotes'.format(streamer=streamer)
         with RedisManager.pipeline_context() as pipeline:
             pipeline.delete(key)
-            for emote in channel_emotes:
-                pipeline.hset(key, emote['code'], emote['emote_hash'])
+            for emote_code, emote_hash in self.channel_emotes.items():
+                pipeline.hset(key, emote_code, emote_hash)
 
-        self.all_emotes = []
+    def update_valid_emotes(self):
+        self.valid_emotes = []
+
+        for emote_code, emote_hash in self.global_emotes.items():
+            self.valid_emotes.append(self.build_emote(emote_code, emote_hash))
+
+        for emote_code, emote_hash in self.channel_emotes.items():
+            self.valid_emotes.append(self.build_emote(emote_code, emote_hash))
+
+    def build_emote(self, emote_code, emote_hash):
+        return {
+                'code': emote_code,
+                'type': 'bttv',
+                'emote_hash': emote_hash,
+                'regex': re.compile('(?<![^ ]){0}(?![^ ])'.format(re.escape(emote_code))),
+                }
+
+    def update_emotes(self):
+        log.debug('Updating BTTV Emotes...')
+
+        self.update_global_emotes()
+        self.update_channel_emotes()
+        self.update_valid_emotes()
+
+
+class FFZEmoteManager:
+    def __init__(self):
+        from pajbot.apiwrappers import FFZApi
+        self.api = FFZApi()
+
+        # Key = Emote code (i.e. KKonaW)
+        # Value = Emote hash (i.e. 157420)
+        self.global_emotes = {}
+        self.channel_emotes = {}
+
+        # Proper syntax described in build_emote
+        self.valid_emotes = []
+
+        self.update_global_emotes()
+        self.load_cached_channel_emotes()
+        self.update_valid_emotes()
+
+    def load_cached_channel_emotes(self):
+        streamer = StreamHelper.get_streamer()
+
+        # Try to get the list of global emotes from redis
+        try:
+            _channel_emotes = RedisManager.get().hgetall('{streamer}:emotes:ffz_channel_emotes'.format(streamer=streamer))
+        except:
+            _channel_emotes = {}
+
+        for code in _channel_emotes:
+            emote_hash = _channel_emotes[code]
+            self.channel_emotes[code] = emote_hash
+
+    def update_global_emotes(self):
+        # Try to get cached global emotes from redis
+        _global_emotes = RedisManager.get().get('global:emotes:ffz_global')
+        if _global_emotes and len(_global_emotes) > 0:
+            _global_emotes = json.loads(_global_emotes)
+            log.info('Got cached FFZ global emotes!')
+        else:
+            _global_emotes = self.api.get_global_emotes()
+            if _global_emotes and len(_global_emotes) > 0:
+                RedisManager.get().setex('global:emotes:ffz_global', time=3600, value=json.dumps(_global_emotes, separators=(',', ':')))
+
+        if _global_emotes and len(_global_emotes) > 0:
+            self.global_emotes = {}
+            for emote in _global_emotes:
+                self.global_emotes[emote['code']] = emote['emote_hash']
+
+    def update_channel_emotes(self):
+        _channel_emotes = self.api.get_channel_emotes(StreamHelper.get_streamer())
+        self.channel_emotes = {}
+        for emote in _channel_emotes:
+            self.channel_emotes[emote['code']] = emote['emote_hash']
+
+        # Store channel emotes in redis
+        streamer = StreamHelper.get_streamer()
+        key = '{streamer}:emotes:ffz_channel_emotes'.format(streamer=streamer)
         with RedisManager.pipeline_context() as pipeline:
-            for emote in global_emotes + channel_emotes:
-                # Store all possible emotes, with their regex in an easily
-                # accessible list.
-                self.all_emotes.append(self.build_emote(emote['code'], emote['emote_hash']))
+            pipeline.delete(key)
+            for emote_code, emote_hash in self.channel_emotes.items():
+                pipeline.hset(key, emote_code, emote_hash)
 
-                # Make sure all available emotes are available in redis
-                pipeline.hset('global:emotes:bttv', emote['code'], emote['emote_hash'])
+    def update_valid_emotes(self):
+        self.valid_emotes = []
+
+        for emote_code, emote_hash in self.global_emotes.items():
+            self.valid_emotes.append(self.build_emote(emote_code, emote_hash))
+
+        for emote_code, emote_hash in self.channel_emotes.items():
+            self.valid_emotes.append(self.build_emote(emote_code, emote_hash))
+
+    def build_emote(self, emote_code, emote_hash):
+        return {
+                'code': emote_code,
+                'type': 'ffz',
+                'emote_id': emote_hash,
+                'regex': re.compile('(?<![^ ]){0}(?![^ ])'.format(re.escape(emote_code))),
+                }
+
+    def update_emotes(self):
+        log.debug('Updating FFZ Emotes...')
+
+        self.update_global_emotes()
+        self.update_channel_emotes()
+        self.update_valid_emotes()
 
 
 class EmoteManager:
@@ -75,6 +190,7 @@ class EmoteManager:
         self.bot = bot
         self.streamer = bot.streamer
         self.bttv_emote_manager = BTTVEmoteManager()
+        self.ffz_emote_manager = FFZEmoteManager()
         redis = RedisManager.get()
         self.subemotes = redis.hgetall('global:emotes:twitch_subemotes')
 
@@ -217,7 +333,7 @@ class EmoteManager:
                     log.error('Message: {}'.format(message))
 
         # BTTV Emotes
-        for emote in self.bttv_emote_manager.all_emotes:
+        for emote in self.bttv_emote_manager.valid_emotes:
             num = 0
             start = -1
             end = -1
@@ -230,6 +346,25 @@ class EmoteManager:
                 message_emotes.append({
                     'code': emote['code'],
                     'bttv_hash': emote['emote_hash'],
+                    'start': start,
+                    'end': end,
+                    'count': num,
+                    })
+
+        # FFZ Emotes
+        for emote in self.ffz_emote_manager.valid_emotes:
+            num = 0
+            start = -1
+            end = -1
+            for match in emote['regex'].finditer(message):
+                num += 1
+                if num == 1:
+                    start = match.span()[0]
+                    end = match.span()[1] - 1  # don't ask me
+            if num > 0:
+                message_emotes.append({
+                    'code': emote['code'],
+                    'ffz_id': emote['emote_id'],
                     'start': start,
                     'end': end,
                     'count': num,

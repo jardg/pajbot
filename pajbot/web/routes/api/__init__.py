@@ -9,8 +9,9 @@ import pajbot.web.routes.api.modules
 import pajbot.web.routes.api.pleblist
 import pajbot.web.routes.api.social
 import pajbot.web.routes.api.streamtip
+import pajbot.web.routes.api.streamelements
 import pajbot.web.routes.api.timers
-import pajbot.web.routes.api.twitchalerts
+import pajbot.web.routes.api.streamlabs
 import pajbot.web.routes.api.twitter
 import pajbot.web.routes.api.users
 
@@ -18,7 +19,7 @@ import pajbot.web.routes.api.users
 def init(app):
     # Initialize the v1 api
     # /api/v1
-    api = Api(app, prefix='/api/v1', catch_all_404s=True)
+    api = Api(app, prefix='/api/v1', catch_all_404s=False)
 
     # Initialize any common settings and routes
     pajbot.web.routes.api.common.init(api)
@@ -38,8 +39,8 @@ def init(app):
     # /streamtip
     pajbot.web.routes.api.streamtip.init(api)
 
-    # /twitchalerts
-    pajbot.web.routes.api.twitchalerts.init(api)
+    # /streamlabs
+    pajbot.web.routes.api.streamlabs.init(api)
 
     # /clr
     pajbot.web.routes.api.clr.init(api)
@@ -58,3 +59,6 @@ def init(app):
 
     # /modules
     pajbot.web.routes.api.modules.init(api)
+
+    # /streamelements
+    pajbot.web.routes.api.streamelements.init(api)

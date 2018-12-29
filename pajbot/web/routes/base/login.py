@@ -8,7 +8,7 @@ from flask import url_for
 from flask_oauthlib.client import OAuth
 from flask_oauthlib.client import OAuthException
 
-from pajbot.managers import DBManager
+from pajbot.managers.db import DBManager
 from pajbot.models.user import User
 
 log = logging.getLogger(__name__)
@@ -52,10 +52,14 @@ def init(app):
             log.exception('An exception was caught while authorizing')
             next_url = get_next_url(request, 'state')
             return redirect(next_url)
+        except:
+            log.exception('Unhandled exception while authorizing')
+            return render_template('login_error.html')
 
         print(resp)
         if resp is None:
-            log.warn('Access denied: reason={}, error={}'.format(request.args['error'], request.args['error_description']))
+            if 'error' in request.args and 'error_description' in request.args:
+                log.warn('Access denied: reason={}, error={}'.format(request.args['error'], request.args['error_description']))
             next_url = get_next_url(request, 'state')
             return redirect(next_url)
         elif type(resp) is OAuthException:

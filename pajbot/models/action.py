@@ -1,12 +1,14 @@
 import collections
 import json
 import logging
+import sys
 
 import irc
 import regex as re
 import requests
 
 from pajbot.managers.schedule import ScheduleManager
+from pajbot.modules.ascii import AsciiProtectionModule
 
 log = logging.getLogger(__name__)
 
@@ -21,8 +23,8 @@ class ActionParser:
         except ImportError:
             from pajbot.dispatch import Dispatch
         except:
-            from pajbot.dispatch import Dispatch
-            log.exception('Something went wrong while attemting to import UserDispatch')
+            log.exception('Something went wrong while attemting to import Dispatch, this should never happen')
+            sys.exit(1)
 
         if not data:
             data = json.loads(raw_data)
@@ -116,7 +118,7 @@ class IfSubstitution:
 class Substitution:
     argument_substitution_regex = re.compile(r'\$\((\d+)\)')
     substitution_regex = re.compile(r'\$\(([a-z_]+)(\;[0-9]+)?(\:[\w\.\/ -]+|\:\$\([\w_:;\._\/ -]+\))?(\|[\w]+(\([\w%:/ +-]+\))?)*(\,[\'"]{1}[\w \|$;_\-:()\.]+[\'"]{1}){0,2}\)')
-    urlfetch_substitution_regex = re.compile(r'\$\(urlfetch ([\w-:/&=.,/? ()]+)\)')
+    urlfetch_substitution_regex = re.compile(r'\$\(urlfetch ([\w-:/&=.,/? ()_]+)\)')
     urlfetch_substitution_regex_all = re.compile(r'\$\(urlfetch (.+?)\)')
 
     def __init__(self, cb, needle, key=None, argument=None, filters=[]):
@@ -330,12 +332,14 @@ def get_substitutions(string, bot):
         method_mapping['usersource'] = bot.get_usersource_value
         method_mapping['time'] = bot.get_time_value
         method_mapping['curdeck'] = bot.decks.action_get_curdeck
+        method_mapping['stream'] = bot.stream_manager.get_stream_value
         method_mapping['current_stream'] = bot.stream_manager.get_current_stream_value
         method_mapping['last_stream'] = bot.stream_manager.get_last_stream_value
         method_mapping['current_song'] = bot.get_current_song_value
         method_mapping['args'] = bot.get_args_value
         method_mapping['strictargs'] = bot.get_strictargs_value
         method_mapping['notify'] = bot.get_notify_value
+        method_mapping['command'] = bot.get_command_value
     except AttributeError:
         pass
 
@@ -405,6 +409,20 @@ class MessageAction(BaseAction):
             resp = resp.replace(needle, value)
             log.debug('Replacing {0} with {1}'.format(needle, value))
 
+        if 'command' in extra and 'source' in extra:
+            if extra['command'].run_through_banphrases is True:
+                checks = {
+                        'banphrase': (bot.banphrase_manager.check_message, [resp, extra['source']]),
+                        'ascii': (AsciiProtectionModule.check_message, [resp]),
+                        }
+                # Check banphrases
+                for check in checks:
+                    # Make sure the module is enabled
+                    if check in bot.module_manager:
+                        res = checks[check][0](*checks[check][1])
+                        if res is not False:
+                            return None
+
         return resp
 
     def get_extra_data(self, source, message, args):
@@ -420,7 +438,7 @@ class MessageAction(BaseAction):
         raise NotImplementedError('Please implement the run method.')
 
 
-def urlfetch_msg(method, message, num_urlfetch_subs, args=[], kwargs={}):
+def urlfetch_msg(method, message, num_urlfetch_subs, bot, extra={}, args=[], kwargs={}):
 
     urlfetch_subs = get_urlfetch_substitutions(message)
 
@@ -430,10 +448,26 @@ def urlfetch_msg(method, message, num_urlfetch_subs, args=[], kwargs={}):
 
     for needle, url in urlfetch_subs.items():
         try:
-            value = requests.get(url).text.strip().replace('\n', '').replace('\r', '')[:400]
+            r = requests.get(url)
+            r.raise_for_status()
+            value = r.text.strip().replace('\n', '').replace('\r', '')[:400]
         except:
             return False
         message = message.replace(needle, value)
+
+    if 'command' in extra and 'source' in extra:
+        if extra['command'].run_through_banphrases is True:
+            checks = {
+                    'banphrase': (bot.banphrase_manager.check_message, [message, extra['source']]),
+                    'ascii': (AsciiProtectionModule.check_message, [message]),
+                    }
+            # Check banphrases
+            for check in checks:
+                # Make sure the module is enabled
+                if check in bot.module_manager:
+                    res = checks[check][0](*checks[check][1])
+                    if res is not False:
+                        return None
 
     args.append(message)
 
@@ -444,7 +478,8 @@ class SayAction(MessageAction):
     subtype = 'say'
 
     def run(self, bot, source, message, event={}, args={}):
-        resp = self.get_response(bot, self.get_extra_data(source, message, args))
+        extra = self.get_extra_data(source, message, args)
+        resp = self.get_response(bot, extra)
 
         if not resp:
             return False
@@ -458,6 +493,8 @@ class SayAction(MessageAction):
                         'args': [],
                         'kwargs': {},
                         'method': bot.say,
+                        'bot': bot,
+                        'extra': extra,
                         'message': resp,
                         'num_urlfetch_subs': self.num_urlfetch_subs,
                         })
@@ -467,7 +504,8 @@ class MeAction(MessageAction):
     subtype = 'me'
 
     def run(self, bot, source, message, event={}, args={}):
-        resp = self.get_response(bot, self.get_extra_data(source, message, args))
+        extra = self.get_extra_data(source, message, args)
+        resp = self.get_response(bot, extra)
 
         if not resp:
             return False
@@ -481,6 +519,8 @@ class MeAction(MessageAction):
                         'args': [],
                         'kwargs': {},
                         'method': bot.me,
+                        'bot': bot,
+                        'extra': extra,
                         'message': resp,
                         'num_urlfetch_subs': self.num_urlfetch_subs,
                         })
@@ -490,7 +530,8 @@ class WhisperAction(MessageAction):
     subtype = 'whisper'
 
     def run(self, bot, source, message, event={}, args={}):
-        resp = self.get_response(bot, self.get_extra_data(source, message, args))
+        extra = self.get_extra_data(source, message, args)
+        resp = self.get_response(bot, extra)
 
         if not resp:
             return False
@@ -504,6 +545,8 @@ class WhisperAction(MessageAction):
                         'args': [source.username],
                         'kwargs': {},
                         'method': bot.whisper,
+                        'bot': bot,
+                        'extra': extra,
                         'message': resp,
                         'num_urlfetch_subs': self.num_urlfetch_subs,
                         })
@@ -513,7 +556,8 @@ class ReplyAction(MessageAction):
     subtype = 'reply'
 
     def run(self, bot, source, message, event={}, args={}):
-        resp = self.get_response(bot, self.get_extra_data(source, message, args))
+        extra = self.get_extra_data(source, message, args)
+        resp = self.get_response(bot, extra)
 
         if not resp:
             return False
@@ -530,6 +574,8 @@ class ReplyAction(MessageAction):
                                 'channel': event.target
                                 },
                             'method': bot.say,
+                            'bot': bot,
+                            'extra': extra,
                             'message': resp,
                             'num_urlfetch_subs': self.num_urlfetch_subs,
                             })
@@ -543,6 +589,8 @@ class ReplyAction(MessageAction):
                             'args': [source.username],
                             'kwargs': {},
                             'method': bot.whisper,
+                            'bot': bot,
+                            'extra': extra,
                             'message': resp,
                             'num_urlfetch_subs': self.num_urlfetch_subs,
                             })

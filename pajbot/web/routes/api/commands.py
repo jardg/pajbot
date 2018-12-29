@@ -8,17 +8,23 @@ from sqlalchemy.orm import joinedload
 import pajbot.modules
 import pajbot.utils
 import pajbot.web.utils
-from pajbot.managers import AdminLogManager
-from pajbot.managers import DBManager
+from pajbot.managers.adminlog import AdminLogManager
+from pajbot.managers.db import DBManager
 from pajbot.models.command import Command
 from pajbot.models.command import CommandData
-from pajbot.models.command import CommandManager
 from pajbot.models.module import ModuleManager
 from pajbot.models.sock import SocketClientManager
-from pajbot.tbutil import find
+from pajbot.utils import find
 
 log = logging.getLogger(__name__)
 
+class APICommands(Resource):
+    def get(self):
+        commands = pajbot.web.utils.get_cached_commands()
+
+        return {
+                'commands': commands
+                }, 200
 
 class APICommand(Resource):
     def get(self, raw_command_id):
@@ -198,7 +204,7 @@ class APICommandCheckAlias(Resource):
 
         request_alias = args['alias'].lower()
 
-        command_manager = CommandManager(
+        command_manager = pajbot.managers.command.CommandManager(
                 socket_manager=None,
                 module_manager=ModuleManager(None).load(),
                 bot=None).load(enabled=None)
@@ -219,6 +225,7 @@ class APICommandCheckAlias(Resource):
 
 
 def init(api):
+    api.add_resource(APICommands, '/commands')
     api.add_resource(APICommand, '/commands/<raw_command_id>')
     api.add_resource(APICommandRemove, '/commands/remove/<int:command_id>')
     api.add_resource(APICommandUpdate, '/commands/update/<int:command_id>')

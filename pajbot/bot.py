@@ -8,45 +8,40 @@ import time
 import urllib
 
 import irc.client
+import requests
 from numpy import random
 from pytz import timezone
 
 import pajbot.utils
 from pajbot.actions import ActionQueue
 from pajbot.apiwrappers import TwitchAPI
-from pajbot.managers import DBManager
-from pajbot.managers import DeckManager
-from pajbot.managers import EmoteManager
-from pajbot.managers import FilterManager
-from pajbot.managers import HandlerManager
-from pajbot.managers import KVIManager
-from pajbot.managers import MultiIRCManager
-from pajbot.managers import RedisManager
-from pajbot.managers import ScheduleManager
-from pajbot.managers import SingleIRCManager
-from pajbot.managers import TimeManager
-from pajbot.managers import TwitterManager
-from pajbot.managers import UserManager
-from pajbot.managers import WebSocketManager
+from pajbot.managers.command import CommandManager
+from pajbot.managers.db import DBManager
+from pajbot.managers.deck import DeckManager
+from pajbot.managers.emote import EmoteManager
+from pajbot.managers.filter import FilterManager
+from pajbot.managers.handler import HandlerManager
+from pajbot.managers.irc import MultiIRCManager
+from pajbot.managers.irc import SingleIRCManager
+from pajbot.managers.kvi import KVIManager
+from pajbot.managers.redis import RedisManager
+from pajbot.managers.schedule import ScheduleManager
+from pajbot.managers.time import TimeManager
+from pajbot.managers.twitter import TwitterManager
+from pajbot.managers.user import UserManager
+from pajbot.managers.websocket import WebSocketManager
 from pajbot.models.action import ActionParser
 from pajbot.models.banphrase import BanphraseManager
-from pajbot.models.command import CommandManager
 from pajbot.models.module import ModuleManager
 from pajbot.models.pleblist import PleblistManager
 from pajbot.models.sock import SocketManager
 from pajbot.models.stream import StreamManager
 from pajbot.models.timer import TimerManager
 from pajbot.streamhelper import StreamHelper
-from pajbot.tbutil import time_method
-from pajbot.tbutil import time_since
+from pajbot.utils import time_method
+from pajbot.utils import time_since
 
 log = logging.getLogger(__name__)
-
-
-class TMI:
-    message_limit = 90
-    whispers_message_limit = 20
-    whispers_limit_interval = 5  # in seconds
 
 
 class Bot:
@@ -54,7 +49,7 @@ class Bot:
     Main class for the twitch bot
     """
 
-    version = '2.8.0'
+    version = '1.30'
     date_fmt = '%H:%M'
     admin = None
     url_regex_str = r'\(?(?:(http|https):\/\/)?(?:((?:[^\W\s]|\.|-|[:]{1})+)@{1})?((?:www.)?(?:[^\W\s]|\.|-)+[\.][^\W\s]{2,4}|localhost(?=\/)|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d*))?([\/]?[^\s\?]*[\/]{1})*(?:\/?([^\s\n\?\[\]\{\}\#]*(?:(?=\.)){1}|[^\s\n\?\[\]\{\}\.\#]*)?([\.]{1}[^\s\?\#]*)?)?(?:\?{1}([^\s\n\#\[\]]*))?([\#][^\s\n]*)?\)?'
@@ -98,12 +93,12 @@ class Bot:
             self.streamer = self.channel[1:]
 
         self.wolfram = None
-        try:
-            if 'wolfram' in config['main']:
+        if 'wolfram' in config['main']:
+            try:
                 import wolframalpha
                 self.wolfram = wolframalpha.Client(config['main']['wolfram'])
-        except:
-            pass
+            except ImportError:
+                pass
 
         self.silent = False
         self.dev = False
@@ -123,7 +118,7 @@ class Bot:
     def __init__(self, config, args=None):
         # Load various configuration variables from the given config object
         # The config object that should be passed through should
-        # come from pajbot.tbutil.load_config
+        # come from pajbot.utils.load_config
         self.load_config(config)
 
         # Update the database scheme if necessary using alembic
@@ -177,6 +172,7 @@ class Bot:
                 }
 
         self.execute_every(10 * 60, self.commit_all)
+        self.execute_every(1, self.do_tick)
 
         try:
             self.admin = self.config['main']['admin']
@@ -203,10 +199,11 @@ class Bot:
             twitch_client_id = self.config['twitchapi'].get('client_id', None)
             twitch_oauth = self.config['twitchapi'].get('oauth', None)
 
-        self.twitchapi = TwitchAPI(twitch_client_id, twitch_oauth)
+        # A client ID is required for the bot to work properly now, give an error for now
+        if twitch_client_id is None:
+            log.error('MISSING CLIENT ID, SET "client_id" VALUE UNDER [twitchapi] SECTION IN CONFIG FILE')
 
-        self.ascii_timeout_duration = 120
-        self.msg_length_timeout_duration = 120
+        self.twitchapi = TwitchAPI(twitch_client_id, twitch_oauth)
 
         self.data = {}
         self.data_cb = {}
@@ -214,6 +211,8 @@ class Bot:
 
         self.data['broadcaster'] = self.streamer
         self.data['version'] = self.version
+        self.data['version_brief'] = self.version_brief
+        self.data['bot_name'] = self.nickname
         self.data_cb['status_length'] = self.c_status_length
         self.data_cb['stream_status'] = self.c_stream_status
         self.data_cb['bot_uptime'] = self.c_uptime
@@ -223,8 +222,6 @@ class Bot:
 
         if self.silent:
             log.info('Silent mode enabled')
-
-        self.reconnection_interval = 5
 
         """
         For actions that need to access the main thread,
@@ -245,6 +242,7 @@ class Bot:
 
         # XXX: TEMPORARY UGLY CODE
         HandlerManager.add_handler('on_user_gain_tokens', self.on_user_gain_tokens)
+        HandlerManager.add_handler('send_whisper', self.whisper)
 
     def on_connect(self, sock):
         return self.irc.on_connect(sock)
@@ -350,6 +348,14 @@ class Bot:
 
         return None
 
+    def get_command_value(self, key, extra={}):
+        try:
+            return getattr(extra['command'].data, key)
+        except:
+            log.exception('Caught exception in get_source_value')
+
+        return None
+
     def get_usersource_value(self, key, extra={}):
         try:
             user = self.users.find(extra['argument'])
@@ -438,6 +444,27 @@ class Bot:
         log.warning('Unknown key passed to get_value: {0}'.format(key))
         return None
 
+    def privmsg_arr(self, arr):
+        for msg in arr:
+            self.privmsg(msg)
+
+    def privmsg_from_file(self, url, per_chunk=35, chunk_delay=30):
+        try:
+            r = requests.get(url)
+            lines = r.text.split('\n')
+            i = 0
+            while len(lines) > 0:
+                if i == 0:
+                    self.privmsg_arr(lines[:per_chunk])
+                else:
+                    self.execute_delayed(chunk_delay * i, self.privmsg_arr, (lines[:per_chunk],))
+
+                del lines[:per_chunk]
+
+                i = i + 1
+        except:
+            log.exception('error in privmsg_from_file')
+
     def privmsg(self, message, channel=None, increase_message=True):
         if channel is None:
             channel = self.channel
@@ -466,46 +493,46 @@ class Bot:
             else:
                 return 'No recorded stream FeelsBadMan '
 
-    def _ban(self, username):
-        self.privmsg('.ban {0}'.format(username), increase_message=False)
-
     def execute_at(self, at, function, arguments=()):
-        self.reactor.execute_at(at, function, arguments)
+        self.reactor.scheduler.execute_at(at, lambda: function(*arguments))
 
     def execute_delayed(self, delay, function, arguments=()):
-        self.reactor.execute_delayed(delay, function, arguments)
+        self.reactor.scheduler.execute_after(delay, lambda: function(*arguments))
 
     def execute_every(self, period, function, arguments=()):
-        self.reactor.execute_every(period, function, arguments)
+        self.reactor.scheduler.execute_every(period, lambda: function(*arguments))
 
-    def ban(self, username):
+    def _ban(self, username, reason=''):
+        self.privmsg('.ban {0} {1}'.format(username, reason), increase_message=False)
+
+    def ban(self, username, reason=''):
         log.debug('Banning {}'.format(username))
-        self._timeout(username, 30)
-        self.execute_delayed(1, self._ban, (username, ))
+        self._timeout(username, 30, reason)
+        self.execute_delayed(1, self._ban, (username, reason))
 
-    def ban_user(self, user):
-        self._timeout(user.username, 30)
-        self.execute_delayed(1, self._ban, (user.username, ))
+    def ban_user(self, user, reason=''):
+        self._timeout(user.username, 30, reason)
+        self.execute_delayed(1, self._ban, (user.username, reason))
 
     def unban(self, username):
         self.privmsg('.unban {0}'.format(username), increase_message=False)
 
-    def _timeout(self, username, duration):
-        self.privmsg('.timeout {0} {1}'.format(username, duration), increase_message=False)
+    def _timeout(self, username, duration, reason=''):
+        self.privmsg('.timeout {0} {1} {2}'.format(username, duration, reason), increase_message=False)
 
-    def timeout(self, username, duration):
+    def timeout(self, username, duration, reason=''):
         log.debug('Timing out {} for {} seconds'.format(username, duration))
-        self._timeout(username, duration)
-        self.execute_delayed(1, self._timeout, (username, duration))
+        self._timeout(username, duration, reason)
+        self.execute_delayed(1, self._timeout, (username, duration, reason))
 
-    def timeout_warn(self, user, duration):
+    def timeout_warn(self, user, duration, reason=''):
         duration, punishment = user.timeout(duration, warning_module=self.module_manager['warning'])
-        self.timeout(user.username, duration)
+        self.timeout(user.username, duration, reason)
         return (duration, punishment)
 
-    def timeout_user(self, user, duration):
-        self._timeout(user.username, duration)
-        self.execute_delayed(1, self._timeout, (user.username, duration))
+    def timeout_user(self, user, duration, reason=''):
+        self._timeout(user.username, duration, reason)
+        self.execute_delayed(1, self._timeout, (user.username, duration, reason))
 
     def whisper(self, username, *messages, separator='. '):
         """
@@ -519,6 +546,14 @@ class Bot:
         message = separator.join(messages)
 
         return self.irc.whisper(username, message)
+
+    def send_message_to_user(self, user, message, separator='. ', method='say'):
+        if method == 'say':
+            self.say(user.username + ', ' + lowercase_first_letter(message), separator=separator)
+        elif method == 'whisper':
+            self.whisper(user.username, message, separator=separator)
+        else:
+            log.warning('Unknown send_message method: {}'.format(method))
 
     def say(self, *messages, channel=None, separator='. '):
         """
@@ -556,6 +591,7 @@ class Bot:
 
     def parse_version(self):
         self.version = self.version
+        self.version_brief = self.version
 
         if self.dev:
             try:
@@ -609,7 +645,7 @@ class Bot:
 
         urls = self.find_unique_urls(msg_raw)
 
-        # log.debug('{2}{0}: {1}'.format(source.username, msg_raw, '<w>' if whisper else ''))
+        log.debug('{2}{0}: {1}'.format(source.username, msg_raw, '<w>' if whisper else ''))
 
         res = HandlerManager.trigger('on_message',
                 source, msg_raw, message_emotes, whisper, urls, event,
@@ -619,6 +655,22 @@ class Bot:
 
         source.last_seen = datetime.datetime.now()
         source.last_active = datetime.datetime.now()
+
+        """
+        if self.streamer == 'forsenlol' and whisper is False:
+            follow_time = self.twitchapi.get_follow_relationship2(source.username, self.streamer)
+
+            if follow_time is False:
+                self._timeout(source.username, 600, '2 years follow mode (or api is down?)')
+                return
+
+            follow_age = datetime.datetime.now() - follow_time
+            log.debug(follow_age)
+
+            if follow_age.days < 730:
+                log.debug('followed less than 730 days LUL')
+                self._timeout(source.username, 600, '2 years follow mode')
+                """
 
         if source.ignored:
             return False
@@ -683,6 +735,24 @@ class Bot:
         type = 'whisper' if chatconn in self.whisper_manager else 'normal'
         log.debug('NOTICE {}@{}: {}'.format(type, event.target, event.arguments))
 
+    def on_usernotice(self, chatconn, event):
+        # We use .lower() in case twitch ever starts sending non-lowercased usernames
+        tags = {}
+        for d in event.tags:
+            tags[d['key']] = d['value']
+
+        if 'login' not in tags:
+            return
+
+        username = tags['login']
+
+        with self.users.get_user_context(username) as source:
+            msg = ''
+            if len(event.arguments) > 0:
+                msg = event.arguments[0]
+            HandlerManager.trigger('on_usernotice',
+                    source, msg, tags)
+
     def on_action(self, chatconn, event):
         self.on_pubmsg(chatconn, event)
 
@@ -691,6 +761,7 @@ class Bot:
             return False
 
         username = event.source.user.lower()
+
 
         # We use .lower() in case twitch ever starts sending non-lowercased usernames
         with self.users.get_user_context(username) as source:
@@ -722,6 +793,9 @@ class Bot:
 
         HandlerManager.trigger('on_commit', stop_on_false=False)
 
+    def do_tick(self):
+        HandlerManager.trigger('on_tick')
+
     def quit(self, message, event, **options):
         quit_chub = self.config['main'].get('control_hub', None)
         quit_delay = 0
@@ -747,6 +821,7 @@ class Bot:
                 }
 
         try:
+            ScheduleManager.base_scheduler.print_jobs()
             ScheduleManager.base_scheduler.shutdown(wait=False)
         except:
             log.exception('Error while shutting down the apscheduler')
@@ -770,7 +845,7 @@ class Bot:
                 'time_since_minutes': lambda var, args: 'no time' if var == 0 else time_since(var * 60, 0, format='long'),
                 'time_since': lambda var, args: 'no time' if var == 0 else time_since(var, 0, format='long'),
                 'time_since_dt': _filter_time_since_dt,
-                'urlencode': lambda var, args: urllib.parse.urlencode(var),
+                'urlencode': _filter_urlencode,
                 'join': _filter_join,
                 'number_format': _filter_number_format,
                 }
@@ -813,3 +888,11 @@ def _filter_number_format(var, args):
 
 def _filter_strftime(var, args):
     return var.strftime(args[0])
+
+
+def _filter_urlencode(var, args):
+    return urllib.parse.urlencode({'x': var})[2:]
+
+
+def lowercase_first_letter(s):
+    return s[:1].lower() + s[1:] if s else ''

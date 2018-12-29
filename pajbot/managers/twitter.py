@@ -1,12 +1,13 @@
 import logging
 from datetime import datetime
+from threading import Thread
 
 import tweepy
 
-from pajbot.managers import DBManager
+from pajbot.managers.db import DBManager
 from pajbot.models.twitter import TwitterUser
-from pajbot.tbutil import time_since
-from pajbot.tbutil import tweet_prettify_urls
+from pajbot.utils import time_since
+from pajbot.utils import tweet_prettify_urls
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,10 @@ class TwitterManager:
                 self.listener.relevant_users.append(username)
                 log.info('Now following {0}'.format(username))
                 return True
+            else:
+                log.warn('Already following {0}'.format(username))
+        else:
+            log.error('No twitter listener set up')
         return False
 
     def unfollow_user(self, username):
@@ -79,7 +84,10 @@ class TwitterManager:
                         return True
                     else:
                         log.warning('Trying to unfollow someone we are not following')
-                        return False
+            else:
+                log.warn('Trying to unfollow someone we are not following (2) {0}'.format(username))
+        else:
+            log.error('No twitter listener set up')
 
             return False
 
@@ -95,7 +103,7 @@ class TwitterManager:
                     if tweet.user.screen_name.lower() in self.relevant_users:
                         if not tweet.text.startswith('RT ') and tweet.in_reply_to_screen_name is None:
                             tw = tweet_prettify_urls(tweet)
-                            self.bot.say('Volcania New tweet from {0}: {1}'.format(tweet.user.screen_name, tw.replace('\n', ' ')))
+                            self.bot.say('B) New cool tweet from {0}: {1}'.format(tweet.user.screen_name, tw.replace('\n', ' ')))
 
                 def on_error(self, status):
                     log.warning('Unhandled in twitter stream: {0}'.format(status))
@@ -105,7 +113,7 @@ class TwitterManager:
 
     def initialize_twitter_stream(self):
         if self.twitter_stream is None:
-            self.twitter_stream = tweepy.Stream(self.twitter_auth, self.listener, retry_420=3 * 60, daemonize_thread=True)
+            self.twitter_stream = tweepy.Stream(self.twitter_auth, self.listener, retry_420=3 * 60)
 
     def connect_to_twitter_stream(self):
         """Connect to the twitter stream.
@@ -115,9 +123,16 @@ class TwitterManager:
             self.initialize_listener()
             self.initialize_twitter_stream()
 
-            self.twitter_stream.userstream(_with='followings', replies='all', async=True)
+            self._thread = Thread(target=self._run, daemon=True)
+            self._thread.start()
         except:
             log.exception('Exception caught while trying to connect to the twitter stream')
+
+    def _run(self):
+        try:
+            self.twitter_stream.userstream(_with='followings', replies='all')
+        except:
+            log.exception('Exception caught in twitter stream _run')
 
     def check_twitter_connection(self):
         """Check if the twitter stream is running.
@@ -148,3 +163,4 @@ class TwitterManager:
     def quit(self):
         if self.twitter_stream:
             self.twitter_stream.disconnect()
+            self._thread.join(1.0)

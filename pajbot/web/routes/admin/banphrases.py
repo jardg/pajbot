@@ -7,8 +7,8 @@ from flask import request
 from flask import session
 from sqlalchemy.orm import joinedload
 
-from pajbot.managers import AdminLogManager
-from pajbot.managers import DBManager
+from pajbot.managers.adminlog import AdminLogManager
+from pajbot.managers.db import DBManager
 from pajbot.models.banphrase import Banphrase
 from pajbot.models.banphrase import BanphraseData
 from pajbot.models.sock import SocketClientManager
@@ -42,8 +42,9 @@ def init(page):
                 notify = request.form.get('notify', 'off')
                 case_sensitive = request.form.get('case_sensitive', 'off')
                 sub_immunity = request.form.get('sub_immunity', 'off')
+                remove_accents = request.form.get('remove_accents', 'off')
                 length = int(request.form['length'])
-                phrase = request.form['phrase'].strip()
+                phrase = request.form['phrase']
                 operator = request.form['operator'].strip().lower()
             except (KeyError, ValueError):
                 abort(403)
@@ -53,6 +54,7 @@ def init(page):
             notify = True if notify == 'on' else False
             case_sensitive = True if case_sensitive == 'on' else False
             sub_immunity = True if sub_immunity == 'on' else False
+            remove_accents = True if remove_accents == 'on' else False
 
             if len(name) == 0:
                 abort(403)
@@ -63,7 +65,7 @@ def init(page):
             if length < 0 or length > 1209600:
                 abort(403)
 
-            valid_operators = ['contains', 'startswith', 'endswith']
+            valid_operators = ['contains', 'startswith', 'endswith', 'exact', 'regex']
             if operator not in valid_operators:
                 abort(403)
 
@@ -80,6 +82,7 @@ def init(page):
                     'notify': notify,
                     'case_sensitive': case_sensitive,
                     'sub_immunity': sub_immunity,
+                    'remove_accents': remove_accents,
                     'length': length,
                     'added_by': user.id,
                     'edited_by': user.id,
